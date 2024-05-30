@@ -467,6 +467,7 @@ class BodyPartAttack:
 
         return total_damage, total_attacks
 
+
 class BallisticSimulation:
     def __init__(self, target_id:int | None, **kwargs):
         self.target_id = target_id
