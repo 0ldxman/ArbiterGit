@@ -13,7 +13,7 @@ class Ammunition:
             self.name = ammo_data.get('name','')
             self.caliber = ammo_data.get('caliber','')
             self.ammo_type = ammo_data.get('type','')
-            self.in_area = ammo_data.get('in_area',0) == 1
+            self.in_area = ammo_data.get('in_area', 0)
 
             self.damage_info = self._get_damage_info()
         else:
