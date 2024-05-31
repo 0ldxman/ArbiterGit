@@ -109,6 +109,7 @@ class Grenade(Ammunition):
         else:
             fragments_value = random.randint(0, self.fragments)
             return Fragments(self.fragments_type, fragments_value, data_manager=self.data_manager).process_fragments_damage(), fragments_value
+
     def detonate(self):
         total_damage = {}
         total_damage['main_damage'] = self.fire()
