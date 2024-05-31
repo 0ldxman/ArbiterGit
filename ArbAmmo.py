@@ -74,6 +74,7 @@ class Fragment(Ammunition):
     def __init__(self, fragment_id:str):
         super().__init__(fragment_id)
 
+
 class Grenade(Ammunition):
     def __init__(self, ammo_id: str):
         super().__init__(ammo_id)
