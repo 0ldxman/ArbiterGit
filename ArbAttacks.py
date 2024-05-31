@@ -212,14 +212,14 @@ class RangeAttack:
             return Item(c_bullets_id, data_manager=self.data_manager).Value, c_bullets_id
 
     def get_current_ammo(self, weapon_id:int):
-        from ArbAmmo import Ammunition
+        from ArbAmmo import Bullet
         from ArbWeapons import WeaponAmmo
 
         c_bullets_id = self.get_current_bullets(weapon_id)[1]
 
         if c_bullets_id is None:
             c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO', filter=f'caliber = "{Weapon(weapon_id, data_manager=self.data_manager).Caliber}"')]
-            return Ammunition(random.choice(c_bullets), data_manager=self.data_manager)
+            return Bullet(random.choice(c_bullets), data_manager=self.data_manager)
         else:
             return WeaponAmmo(weapon_id, data_manager=self.data_manager).get_ammo_type()
 
@@ -258,7 +258,7 @@ class RangeAttack:
 
 
         for attack in range(total_attacks):
-            c_damages = c_current_ammo.fire()
+            c_damages = c_current_ammo.process_bullet()
             roll = self.combat_manager.check_skill(c_weapon.Class, self.attacker, difficulty=current_difficulty)
             c_roll = roll
 

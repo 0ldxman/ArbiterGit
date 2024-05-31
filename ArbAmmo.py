@@ -52,7 +52,8 @@ class Ammunition:
         return self.damage_info
 
 class Bullet(Ammunition):
-    def __init__(self, ammo_id: str):
+    def __init__(self, ammo_id: str, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
         super().__init__(ammo_id)
 
     def process_bullet(self):
@@ -60,7 +61,7 @@ class Bullet(Ammunition):
         main_damage = self.fire()
         total_damage += main_damage
         if self.fragments and self.fragments_type:
-            total_damage += Fragments(self.fragments_type, self.fragments).process_fragments_damage()
+            total_damage += Fragments(self.fragments_type, self.fragments, data_manager=self.data_manager).process_fragments_damage()
 
         return total_damage
 
@@ -69,7 +70,8 @@ class Bullet(Ammunition):
 
 
 class Fragments(Ammunition):
-    def __init__(self, fragment_id:str, value:int):
+    def __init__(self, fragment_id:str, value:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
         super().__init__(fragment_id)
         self.value = value
 
@@ -84,7 +86,8 @@ class Fragments(Ammunition):
         return total_damage
 
 class Grenade(Ammunition):
-    def __init__(self, grenade_id: str):
+    def __init__(self, grenade_id: str, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
         super().__init__(grenade_id)
 
     def get_damaged_layers(self, distance_delta:int, current_layer:int):
@@ -105,7 +108,7 @@ class Grenade(Ammunition):
             return None
         else:
             fragments_value = random.randint(0, self.fragments)
-            return Fragments(self.fragments_type, fragments_value).process_fragments_damage(), fragments_value
+            return Fragments(self.fragments_type, fragments_value, data_manager=self.data_manager).process_fragments_damage(), fragments_value
     def detonate(self):
         total_damage = {}
         total_damage['main_damage'] = self.fire()

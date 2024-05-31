@@ -192,7 +192,7 @@ class WeaponAmmo:
 
     def get_ammo_type(self):
         c_item = self.get_current_magazine()
-        return Ammunition(c_item.Type)
+        return Bullet(c_item.Type, data_manager=self.data_manager)
 
     def load_weapon_data(self):
         c_id = self.get_weapon().Type
