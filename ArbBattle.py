@@ -291,6 +291,7 @@ class Layer:
                     query = {'rounds': c_rounds}
                     mod.set_rounds(c_rounds)
                     self.data_manager.update('BATTLE_LAYERS_MODS', query, filter=f'layer_id = {self.id} AND battle_id = {self.battle_id} AND modifier = "{mod.modifier_type.id}"')
+
     def update_layer(self):
         from ArbAttacks import CombatManager
 
@@ -523,7 +524,9 @@ class Battlefield:
         self.round += 1
         self.data_manager.update('BATTLE_INIT', {'round': self.round}, f'id = {self.id}')
 
-
+        if self.layers:
+            for i in self.layers:
+                self.layers[i].update_layer()
 
         if self.round % self.key_round_delay == 0:
             for act in self.fetch_actors():
@@ -557,8 +560,6 @@ class Battlefield:
         self.data_manager.insert('BATTLE_TEAMS',query)
 
         return BattleTeam(c_id, self.id, data_manager=self.data_manager)
-
-
 
 
 
