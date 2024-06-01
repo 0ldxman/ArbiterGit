@@ -11,10 +11,10 @@ class RelationType:
         data = self.fetch_relation_role_data()
         self.label = data.get('label', 'Неивзестное отношение')
         self.desc = data.get('desc', 'Нет описания отношений')
-        self.trust = data.get('trust', 0)
-        self.sympathy = data.get('sympathy', 0)
-        self.respect = data.get('respect', 0)
-        self.love = data.get('love', 0)
+        self.trust = data.get('trust', 0) if data.get('trust', 0) else 0
+        self.sympathy = data.get('sympathy', 0) if data.get('sympathy', 0) else 0
+        self.respect = data.get('respect', 0) if data.get('respect', 0) else 0
+        self.love = data.get('love', 0) if data.get('love', 0) else 0
 
     def fetch_relation_role_data(self):
         if not self.data_manager.check('RELATION_ROLES', f'id = "{self.relation_id}"'):
@@ -110,6 +110,105 @@ class Relation:
     respect: int
     love:int
 
+@dataclass()
+class Relationship:
+    actor: int
+    subject: int
+
+    relation_of_actor: Relation | None
+    relation_to_actor: Relation | None
+
+    def get_relation_of_actor(self):
+        trust = 0
+        sympathy = 0
+        respect = 0
+        love = 0
+
+        label = None
+
+        if not self.relation_of_actor:
+            return 0, 0, 0, 0, None
+        else:
+            trust += self.relation_of_actor.trust
+            sympathy += self.relation_of_actor.sympathy
+            respect += self.relation_of_actor.respect
+            love += self.relation_of_actor.love
+
+            if self.relation_of_actor.relation_type:
+                trust += self.relation_of_actor.relation_type.trust
+                sympathy += self.relation_of_actor.relation_type.sympathy
+                respect += self.relation_of_actor.relation_type.respect
+                love += self.relation_of_actor.relation_type.love
+
+                label = self.relation_of_actor.relation_type.label
+
+            if self.relation_of_actor.family_relation_type:
+                trust += self.relation_of_actor.family_relation_type.trust
+                sympathy += self.relation_of_actor.family_relation_type.sympathy
+                respect += self.relation_of_actor.family_relation_type.respect
+                love += self.relation_of_actor.family_relation_type.love
+
+                label = self.relation_of_actor.family_relation_type.label
+
+            return trust, sympathy, respect, love, label
+
+    def get_relation_to_actor(self):
+        trust = 0
+        sympathy = 0
+        respect = 0
+        love = 0
+
+        label = None
+
+        if not self.relation_to_actor:
+            return 0, 0, 0, 0, None
+        else:
+            trust += self.relation_to_actor.trust
+            sympathy += self.relation_to_actor.sympathy
+            respect += self.relation_to_actor.respect
+            love += self.relation_to_actor.love
+
+            if self.relation_to_actor.relation_type:
+                trust += self.relation_to_actor.relation_type.trust
+                sympathy += self.relation_to_actor.relation_type.sympathy
+                respect += self.relation_to_actor.relation_type.respect
+                love += self.relation_to_actor.relation_type.love
+
+                label = self.relation_to_actor.relation_type.label
+
+            if self.relation_to_actor.family_relation_type:
+                trust += self.relation_to_actor.family_relation_type.trust
+                sympathy += self.relation_to_actor.family_relation_type.sympathy
+                respect += self.relation_to_actor.family_relation_type.respect
+                love += self.relation_to_actor.family_relation_type.love
+
+                label = self.relation_to_actor.family_relation_type.label
+
+            return trust, sympathy, respect, love, label
+
+    def dict_attributes(self):
+        trust, sympathy, respect, love, label = self.get_relation_of_actor()
+        s_trust, s_sympathy, s_respect, s_love, s_label = self.get_relation_to_actor()
+
+        total_attributes = {'trust': (trust, s_trust),
+                            'sympathy': (sympathy, s_sympathy),
+                            'respect': (respect, s_respect),
+                            'love': (love, s_love),
+                            'label': (label, s_label)}
+
+        return total_attributes
+
+    def __repr__(self):
+        if self.relation_of_actor is None:
+            return f'Unknown to actor'
+        else:
+            trust, sympathy, respect, love, label = self.get_relation_of_actor()
+            s_trust, s_sympathy, s_respect, s_love, s_label = self.get_relation_to_actor()
+
+            return f'{label} [ID {self.subject}]:\n> Доверие: {trust:+} ({s_trust:+})\n> Симпатия: {sympathy:+} ({s_sympathy:+})\n> Уважение: {respect:+} ({s_respect:+})\n> Влечение: {love:+} ({s_love:+})\n\n'
+
+
+
 class CharacterRelations:
     def __init__(self, character_id:int, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
@@ -118,9 +217,10 @@ class CharacterRelations:
         self.relation_to_character = self.fetch_relation_to_character()
         self.relation_of_character = self.fetch_character_relation()
         self.relationships = self.get_character_relationships()
+
     def get_character_relationships(self):
-        of_character = self.fetch_character_relation()
-        to_character = self.fetch_relation_to_character()
+        of_character = self.relation_of_character
+        to_character = self.relation_to_character
 
         total_relationships = {}
         for i in of_character.keys():
@@ -131,6 +231,13 @@ class CharacterRelations:
                 total_relationships[i] = [None, to_character[i]]
             else:
                 total_relationships[i][1] = to_character[i]
+
+        for i in total_relationships.keys():
+            act_relation = total_relationships[i][0]
+            s_relation = total_relationships[i][1]
+
+            relationship = Relationship(self.id, i, act_relation, s_relation)
+            total_relationships[i] = relationship
 
         return total_relationships
 
@@ -175,4 +282,4 @@ class CharacterRelations:
 
         return relationships
 
-print(CharacterRelations(0).get_character_relationships())
+print(CharacterRelations(1).get_character_relationships())
