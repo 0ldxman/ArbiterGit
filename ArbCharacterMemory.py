@@ -34,12 +34,12 @@ class MemoryEvent:
         self.label = data.get('label', 'Неизвестное событие')
         self.event_class = data.get('type', 'Нейтральное')
 
-        self.mood = data.get('mood', 0)
-        self.relation = data.get('relation', 0)
-        self.trust = data.get('trust', 0)
-        self.sympathy = data.get('sympathy', 0)
-        self.respect = data.get('respect', 0)
-        self.love = data.get('love', 0)
+        self.mood = data.get('mood', 0) if data.get('mood', 0) else 0
+        self.relation = data.get('relation', 0) if data.get('relation', 0) else 0
+        self.trust = data.get('trust', 0) if data.get('trust', 0) else 0
+        self.sympathy = data.get('sympathy', 0) if data.get('sympathy', 0) else 0
+        self.respect = data.get('respect', 0) if data.get('respect', 0) else 0
+        self.love = data.get('love', 0) if data.get('love', 0) else 0
 
         self.time_to_forget = data.get('time_to_forget', 0)
         self.description = data.get('desc', 'Неизвестное событие произошло...')
@@ -98,6 +98,57 @@ class CharacterMemoryEvent(MemoryEvent):
         else:
             return False, time
 
+    def __repr__(self):
+        return f'MemoryEvent(id.{self.memory_id}, Type.{self.event_type}, Subject.{self.subject})'
+
+class CharacterMemory:
+    def __init__(self, character_id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.id = character_id
+    def fetch_active_events(self):
+        if self.data_manager.check('CHARS_MEMORY',f'id = {self.id}') is None:
+            return []
+        else:
+            response = []
+            total_events = self.data_manager.select_dict('CHARS_MEMORY', filter=f'id = {self.id}')
+            for event in total_events:
+                response.append(CharacterMemoryEvent(event.get('event_id'), data_manager=self.data_manager))
+
+            return response
+
+    def group_memory_by_subject(self):
+        total_memories = self.fetch_active_events()
+        subject_memories = {}
+        for memory in total_memories:
+            if memory.subject in subject_memories:
+                subject_memories[memory.subject].append(memory)
+            else:
+                subject_memories[memory.subject] = [memory]
+
+        return subject_memories
+
+    def relation_effect_to_subject(self, subject: int):
+        trust = 0
+        sympathy = 0
+        respect = 0
+        love = 0
+        memories = self.group_memory_by_subject()
+        if subject not in memories:
+            return {'trust': trust,
+                    'sympathy': sympathy,
+                    'respect': respect,
+                    'love': love}
+        else:
+            for memory in memories[subject]:
+                trust += memory.trust + memory.relation
+                sympathy += memory.sympathy + memory.relation
+                respect += memory.respect + memory.relation
+                love += memory.love + memory.relation
+
+            return {'trust': trust,
+                    'sympathy': sympathy,
+                    'respect': respect,
+                    'love': love}
 
 @dataclass()
 class Relation:
@@ -108,7 +159,7 @@ class Relation:
     trust: int
     sympathy: int
     respect: int
-    love:int
+    love: int
 
 @dataclass()
 class Relationship:
@@ -117,6 +168,8 @@ class Relationship:
 
     relation_of_actor: Relation | None
     relation_to_actor: Relation | None
+
+    active_events: list
 
     def get_relation_of_actor(self):
         trust = 0
@@ -149,6 +202,12 @@ class Relationship:
                 love += self.relation_of_actor.family_relation_type.love
 
                 label = self.relation_of_actor.family_relation_type.label
+
+            memories_effect = CharacterMemory(self.actor).relation_effect_to_subject(self.subject)
+            trust += memories_effect['trust']
+            sympathy += memories_effect['sympathy']
+            respect += memories_effect['respect']
+            love += memories_effect['love']
 
             return trust, sympathy, respect, love, label
 
@@ -183,6 +242,12 @@ class Relationship:
                 love += self.relation_to_actor.family_relation_type.love
 
                 label = self.relation_to_actor.family_relation_type.label
+
+            memories_effect = CharacterMemory(self.subject).relation_effect_to_subject(self.actor)
+            trust += memories_effect['trust']
+            sympathy += memories_effect['sympathy']
+            respect += memories_effect['respect']
+            love += memories_effect['love']
 
             return trust, sympathy, respect, love, label
 
@@ -236,11 +301,10 @@ class CharacterRelations:
             act_relation = total_relationships[i][0]
             s_relation = total_relationships[i][1]
 
-            relationship = Relationship(self.id, i, act_relation, s_relation)
+            relationship = Relationship(self.id, i, act_relation, s_relation, [])
             total_relationships[i] = relationship
 
         return total_relationships
-
 
     def fetch_character_relation(self) -> dict[Relation]:
         if self.data_manager.check('CHARS_RELATIONS',f'id = {self.id}') is None:
@@ -281,3 +345,5 @@ class CharacterRelations:
             relationships[rel.get('id', None)] = c_rel
 
         return relationships
+
+
