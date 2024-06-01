@@ -281,5 +281,3 @@ class CharacterRelations:
             relationships[rel.get('id', None)] = c_rel
 
         return relationships
-
-print(CharacterRelations(1).get_character_relationships())
