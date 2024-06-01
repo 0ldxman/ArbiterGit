@@ -196,6 +196,14 @@ class LayerModification:
         return Damage(damage=random.randint(min_damage, max_damage), damage_type=self.modifier_type.damage_type,
                       root=self.get_effect_label(), data_manager=data_manager), penetration
 
+    def delete_modifier(self, layer_id:int, battle_id:int, data_manager:DataManager = None):
+        data_manager = data_manager if data_manager else DataManager()
+        if data_manager.check('BATTLE_LAYERS_MODS', f'layer_id = {layer_id} AND battle_id = {battle_id} AND modifier = "{self.modifier_type.id}"'):
+            data_manager.delete('BATTLE_LAYERS_MODS', f'layer_id = {layer_id} AND battle_id = {battle_id} AND modifier = "{self.modifier_type.id}"')
+
+    def set_rounds(self, rounds:int):
+        self.remaining_rounds = rounds
+
     def __repr__(self):
         return f'Mod.{self.modifier_type.id}({self.remaining_rounds})'
 
@@ -271,6 +279,39 @@ class Layer:
             return []
         else:
             return [charc.get('character_id') for charc in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'layer_id = {self.id} AND battle_id = {self.battle_id}')]
+
+    def update_mods(self):
+        c_mods = self.fetch_layer_modification()
+        if c_mods:
+            for mod in c_mods:
+                c_rounds = mod.remaining_rounds - 1
+                if c_rounds == 0:
+                    mod.delete_modifier(self.id, self.battle_id, data_manager=self.data_manager)
+                else:
+                    query = {'rounds': c_rounds}
+                    mod.set_rounds(c_rounds)
+                    self.data_manager.update('BATTLE_LAYERS_MODS', query, filter=f'layer_id = {self.id} AND battle_id = {self.battle_id} AND modifier = "{mod.modifier_type.id}"')
+    def update_layer(self):
+        from ArbAttacks import CombatManager
+
+        c_mods = self.fetch_layer_modification()
+        if not c_mods:
+            return
+        characters = self.fetch_characters()
+
+        for mod in c_mods:
+            c_damage = mod.calculate_damage(self.data_manager)
+            damage_query = [{'damage': c_damage[0],
+                             'penetration': c_damage[1]}]
+
+            if c_damage[0] is not None and c_damage[1] is not None:
+                for char in characters:
+                    total_damage = CombatManager(data_manager=self.data_manager).calculate_total_damage(damage_query, char)
+                    CombatManager(data_manager=self.data_manager).recive_damage(char, total_damage, apply_effect=True)
+
+                    self.data_manager.logger.info(f'Персонаж {char} получил урон {total_damage}')
+
+        self.update_mods()
 
     def describe_objects(self):
         object_text = ''
@@ -481,6 +522,9 @@ class Battlefield:
     def next_round(self):
         self.round += 1
         self.data_manager.update('BATTLE_INIT', {'round': self.round}, f'id = {self.id}')
+
+
+
         if self.round % self.key_round_delay == 0:
             for act in self.fetch_actors():
                 act.set_initiative()

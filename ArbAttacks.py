@@ -114,7 +114,6 @@ class CombatManager:
             penetration_bonus = kwargs.get('penetration_bonus', 0) if kwargs.get('penetration_bonus', None) is not None else 0
             penetration_crit = kwargs.get('crit_penetration', 1) if kwargs.get('crit_penetration', None) is not None else 1
 
-            print(damage_bonus, damage_crit, penetration_bonus, penetration_crit)
             c_penetration = damage.get('penetration') * penetration_crit + penetration_bonus
             c_damage = damage.get('damage') * damage_crit + damage_bonus
 
