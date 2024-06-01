@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime
 import random
-
+from dataclasses import dataclass
 from ArbDatabase import DataManager
 from ArbCharacters import CharacterCombat, CharacterAttributes
 from ArbHealth import Body
@@ -142,6 +142,65 @@ class GameObject(ObjectType):
         return f'Object.{self.object_id} ({self.current_endurance}/{self.max_endurance}DP)'
 
 
+class LayerModificationType:
+    def __init__(self, id:str, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.id = id
+        data = self.fetch_modifier_effects()
+        self.label = data.get('label', 'Неизвестный эффект слоя')
+        self.visibility = data.get('visibility', 0) if data.get('visibility', None) else 0
+        self.noise = data.get('noise', 0) if data.get('noise', None) else 0
+        self.movement_cost = data.get('movement_cost', 0) if data.get('movement_cost', None) else 0
+        self.min_damage = data.get('min_damage', 0) if data.get('min_damage', None) else 0
+        self.max_damage = data.get('max_damage', 0) if data.get('max_damage', None) else 0
+        self.damage_type = data.get('damage_type', None) if data.get('damage_type', None) else 0
+        self.penetration = data.get('penetration', 0) if data.get('penetration', None) else 0
+
+    def fetch_modifier_effects(self):
+        if self.data_manager.check('MODIFIER_INIT', f'id = "{self.id}"') is None:
+            return {}
+        else:
+            return self.data_manager.select_dict('MODIFIER_INIT', filter=f'id = "{self.id}"')[0]
+
+@dataclass()
+class LayerModification:
+    modifier_type: LayerModificationType
+    remaining_rounds: int
+
+    def get_effect_label(self):
+        return self.modifier_type.label
+    def get_visibility(self):
+        return self.modifier_type.visibility
+
+    def get_noise(self):
+        return self.modifier_type.noise
+
+    def get_movement_cost(self):
+        return self.modifier_type.movement_cost
+
+    def calculate_damage(self, data_manager: DataManager = None):
+        from ArbDamage import Damage, Penetration, DamageType
+        if not self.modifier_type.damage_type:
+            return None, None
+
+        if not data_manager:
+            data_manager = DataManager()
+
+        min_damage = self.modifier_type.min_damage
+        max_damage = self.modifier_type.max_damage
+
+        penetration_type = DamageType(self.modifier_type.damage_type, data_manager=data_manager).get_protection_type()
+
+        penetration = Penetration(name=penetration_type, value=self.modifier_type.penetration, blocked_type=self.modifier_type.damage_type)
+
+        return Damage(damage=random.randint(min_damage, max_damage), damage_type=self.modifier_type.damage_type,
+                      root=self.get_effect_label(), data_manager=data_manager), penetration
+
+    def __repr__(self):
+        return f'Mod.{self.modifier_type.id}({self.remaining_rounds})'
+
+
+
 class Layer:
     def __init__(self, id:int, battle_id:int, **kwargs):
         self.id = id
@@ -153,6 +212,18 @@ class Layer:
         self.terrain = Terrain(data.get('terrain_type','Field'), data_manager=self.data_manager)
 
         self.objects = self.fetch_objects()
+
+    def fetch_layer_modification(self):
+        if self.data_manager.check('BATTLE_LAYERS_MODS',f'layer_id = {self.id} AND battle_id = {self.battle_id}') is None:
+            return []
+        else:
+            total_mods = self.data_manager.select_dict('BATTLE_LAYERS_MODS',filter=f'layer_id = {self.id} AND battle_id = {self.battle_id}')
+            response = []
+            for mod in total_mods:
+                c_type = LayerModificationType(mod.get('modifier'), data_manager=self.data_manager)
+                response.append(LayerModification(c_type, mod.get('rounds')))
+
+            return response
 
     def total_visibility(self):
         c_battle = self.get_battle()
@@ -1384,4 +1455,3 @@ class Actor:
 
 
 #print(Actor(0).detect_sound_source(0))
-print(ActorCombat(0).race_attack(1))
