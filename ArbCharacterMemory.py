@@ -25,6 +25,7 @@ class RelationType:
     def __repr__(self):
         return f'RelationType.{self.relation_id}'
 
+
 class MemoryEvent:
     def __init__(self, event_id:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
