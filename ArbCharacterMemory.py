@@ -53,14 +53,14 @@ class CharacterMemoryEvent(MemoryEvent):
         self.data_manager.delete('CHARS_MEMORY', f'event_id = {self.memory_id}')
 
     def check_if_forgotten(self):
-        if self.is_fixed:
-            return False
-
         now = datetime.datetime.today()
         then = datetime.datetime.strptime(self.date, '%Y-%m-%d')
 
         delta = now - then
         delta = delta.days
+
+        if self.is_fixed:
+            return False, delta
 
         if delta >= self.time_to_forget:
             return True, delta
@@ -76,4 +76,4 @@ class CharacterMemoryEvent(MemoryEvent):
         else:
             return False, time
 
-# print(CharacterMemoryEvent(0).check_if_forgotten())
+print(CharacterMemoryEvent(1).forget_if_forgotten())
