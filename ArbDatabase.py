@@ -64,7 +64,7 @@ class ConnectionPool:
 
 
 DEFAULT_LOGGER = Logger()
-DEFAULT_POOL = ConnectionPool(20)
+DEFAULT_POOL = ConnectionPool(50)
 
 
 class DataManager:

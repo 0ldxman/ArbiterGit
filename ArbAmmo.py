@@ -117,5 +117,8 @@ class Grenade(Ammunition):
             frag_damage, frag_value = self.fragments_damage()
             total_damage['fragments_damage'] = frag_damage
             total_damage['fragments_value'] = frag_value
+        else:
+            total_damage['fragments_damage'] = []
+            total_damage['fragments_value'] = 0
 
         return total_damage

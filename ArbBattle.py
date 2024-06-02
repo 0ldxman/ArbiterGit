@@ -140,7 +140,20 @@ class GameObject(ObjectType):
 
     def recive_damage(self, amount:int):
         self.current_endurance -= amount
-        self.data_manager.update('BATTLE_OBJECTS', {'endurance': self.current_endurance}, f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
+        if self.current_endurance <= 0:
+            self.delete_object()
+        else:
+            self.data_manager.update('BATTLE_OBJECTS', {'endurance': self.current_endurance}, f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
+
+    def delete_object(self):
+        chars = self.current_characters()
+        if chars:
+            for char in chars:
+                self.data_manager.update('BATTLE_CHARACTERS',{'object': None}, f'character_id = {char}')
+
+        self.data_manager.delete('BATTLE_OBJECTS',f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
+
+
 
     def __repr__(self):
         return f'Object.{self.object_id} ({self.current_endurance}/{self.max_endurance}DP)'
@@ -1133,6 +1146,7 @@ class ActorCombat:
 
     def throw_grenade(self, enemy_id:int, **kwargs):
         from ArbAmmo import Grenade
+        from ArbAttacks import Explosion
 
         if kwargs.get('grenade_id', None) is not None:
             current_grenade = self.get_current_grenades()[kwargs.get('grenade_id')]
@@ -1143,6 +1157,8 @@ class ActorCombat:
                 grenades_types = [i.get('id') for i in self.data_manager.select_dict('AMMO', filter=f'caliber = "Граната"')]
                 current_grenade = Grenade(random.choice(grenades_types), data_manager=self.data_manager)
 
+
+        print(current_grenade.ammo_id)
         c_cost = 3
 
         if c_cost > self.ap and not kwargs.get('provoked', None):
@@ -1180,9 +1196,15 @@ class ActorCombat:
 
         for layer in grenade_layers:
             if layer in c_battle_layers_ids:
-                maybe_damaged += Layer(layer, Actor(self.id, data_manager=self.data_manager).current_battle_id, data_manager=self.data_manager)
+                maybe_damaged += Layer(layer, Actor(self.id, data_manager=self.data_manager).current_battle_id, data_manager=self.data_manager).characters_not_in_cover()
 
+        total_damage, current_loud, damage_for_cover = Explosion(main_target, maybe_damaged, data_manager=self.data_manager).initiate(current_grenade)
+        self.make_sound('Explotion', current_loud)
 
+        if e_cover:
+            e_cover.recive_damage(damage_for_cover)
+
+        return total_damage
 
 class Actor:
     def __init__(self, id:int, **kwargs):
@@ -1595,3 +1617,5 @@ class Actor:
 
 
 #print(Actor(0).detect_sound_source(0))
+
+print(ActorCombat(0).throw_grenade(1))

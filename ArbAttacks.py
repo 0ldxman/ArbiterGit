@@ -480,16 +480,48 @@ class Explosion:
 
     def initiate(self, grenade: Grenade | HandGrenade, **kwargs):
         enemies_id = self.targets
+
         may_be_damaged = [TargetRoll(i, random.randint(1, 100)) for i in self.may_be_damaged]
+        may_be_damaged.sort(key=lambda x: x.roll)
+
         total_damage = {}
         damage_for_cover = 0
 
         grenade_damage = grenade.detonate()
-        damage = grenade_damage['main_damage']
+        main_damage = grenade_damage['main_damage']
         fragments_damage = grenade_damage['fragments_damage']
         fragments_value = grenade_damage['fragments_value']
 
+        for dam in main_damage:
+            damage_for_cover += dam.get('damage').Damage
 
+        for target in enemies_id:
+            c_damage = self.combat_manager.calculate_total_damage(main_damage, target)
+            if target not in total_damage:
+                total_damage[target] = c_damage
+            else:
+                total_damage[target] += c_damage
+
+        for target in may_be_damaged:
+            if fragments_value <= 0:
+                break
+
+            c_fragments = random.randint(0, fragments_value)
+            fragments_value -= c_fragments
+            current_fragments_damage = random.choices(fragments_damage, k=c_fragments)
+            c_damage = self.combat_manager.calculate_total_damage(current_fragments_damage, target.id)
+            if target.id not in total_damage:
+                total_damage[target.id] = c_damage
+            else:
+                total_damage[target.id] += c_damage
+
+        if total_damage:
+            for target in total_damage:
+                self.combat_manager.recive_damage(target, total_damage[target], apply_effect=True)
+
+        c_loud = random.randint(50, 150)
+
+        return total_damage, c_loud, damage_for_cover
 
 
 class BallisticSimulation:
