@@ -225,7 +225,6 @@ class LayerModification:
         return f'Mod.{self.modifier_type.id}({self.remaining_rounds})'
 
 
-
 class Layer:
     def __init__(self, id:int, battle_id:int, **kwargs):
         self.id = id
@@ -587,7 +586,6 @@ class Battlefield:
         self.data_manager.insert('BATTLE_TEAMS',query)
 
         return BattleTeam(c_id, self.id, data_manager=self.data_manager)
-
 
 
 class ActorCombat:
@@ -1206,6 +1204,7 @@ class ActorCombat:
 
         return total_damage
 
+
 class Actor:
     def __init__(self, id:int, **kwargs):
         self.id = id
@@ -1614,8 +1613,3 @@ class Actor:
 
     def __repr__(self):
         return f'Actor[ID: {self.id}]'
-
-
-#print(Actor(0).detect_sound_source(0))
-
-print(ActorCombat(0).throw_grenade(1))

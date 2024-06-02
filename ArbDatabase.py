@@ -6,6 +6,14 @@ import threading
 import logging
 from typing import TypedDict, Any, TextIO
 import json
+import mysql.connector
+
+# db = mysql.connector.connect(
+#     host='localhost',
+#     user='root',
+#     passwd='656Mnx2Nb6',
+#     database='testdb'
+# )
 
 
 class Logger:
