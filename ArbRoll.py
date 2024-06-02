@@ -1,5 +1,6 @@
 import random
 from ArbDatabase import Logger
+from dataclasses import dataclass
 
 roll_loger = Logger()
 
@@ -266,3 +267,27 @@ class RollCapacity:
 
     def __str__(self):
         return f'CapacityRoll({self.dice})'
+
+
+@dataclass()
+class TargetRoll:
+    id: int
+    roll: int
+
+    def __eq__(self, other):
+        return self.roll == other.roll
+
+    def __ne__(self, other):
+        return self.roll != other.roll
+
+    def __lt__(self, other):
+        return self.roll < other.roll
+
+    def __le__(self, other):
+        return self.roll <= other.roll
+
+    def __gt__(self, other):
+        return self.roll > other.roll
+
+    def __ge__(self, other):
+        return self.roll >= other.roll

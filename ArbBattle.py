@@ -138,6 +138,10 @@ class GameObject(ObjectType):
                 id_list.append(i.get('character_id'))
             return id_list
 
+    def recive_damage(self, amount:int):
+        self.current_endurance -= amount
+        self.data_manager.update('BATTLE_OBJECTS', {'endurance': self.current_endurance}, f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
+
     def __repr__(self):
         return f'Object.{self.object_id} ({self.current_endurance}/{self.max_endurance}DP)'
 
@@ -279,6 +283,16 @@ class Layer:
             return []
         else:
             return [charc.get('character_id') for charc in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'layer_id = {self.id} AND battle_id = {self.battle_id}')]
+
+    def characters_not_in_cover(self):
+        characters = self.fetch_characters()
+        total_list = []
+        for char in characters:
+            if Actor(char, data_manager=self.data_manager).get_current_object():
+                continue
+            else:
+                total_list.append(char)
+        return total_list
 
     def update_mods(self):
         c_mods = self.fetch_layer_modification()
@@ -902,6 +916,32 @@ class ActorCombat:
         if c_bullets_id:
             return Item(c_bullets_id, data_manager=self.data_manager).Value, c_bullets_id
 
+    def get_actor_inventory(self):
+        from ArbItems import Item
+        if self.data_manager.check('CHARS_INVENTORY',f'character_id = {self.id}') is None:
+            return {}
+        else:
+            total_items = {}
+            for item in self.data_manager.select_dict('CHARS_INVENTORY', f'character_id = {self.id}'):
+                total_items[item.get('item_id')] = Item(item.get('item_id'), data_manager=self.data_manager)
+
+            return total_items
+    def get_current_grenades(self):
+        from ArbAmmo import Ammunition
+        from ArbWeapons import HandGrenade
+
+        if self.check_character_owner() is None:
+            return None
+        else:
+            items = self.get_actor_inventory()
+            total_grenades = {}
+            for item in items:
+                if items[item].Class == 'Боеприпасы':
+                    if Ammunition(items[item].Type, data_manager=self.data_manager).caliber == 'Граната':
+                        total_grenades[item] = HandGrenade(item, data_manager=self.data_manager)
+
+            return total_grenades
+
     def use_ammo(self, value:int=None, **kwargs):
         from ArbItems import Item
 
@@ -966,8 +1006,11 @@ class ActorCombat:
                             'cover': enemy_coverage,
                             'size': enemy_size,}
 
-        total_damage, total_attacks, weapon_loudness = RangeAttack(self.id, enemy_id, enemy_attributes=enemy_attributes, data_manager=self.data_manager).initiate(c_weapon)
+        total_damage, total_attacks, weapon_loudness, damage_for_cover = RangeAttack(self.id, enemy_id, enemy_attributes=enemy_attributes, data_manager=self.data_manager).initiate(c_weapon)
         #CharacterCombat(self.id, data_manager=self.data_manager).range_attack(c_weapon, enemy_id=enemy_id, enemy_distance= distance_to_enemy, enemy_cover= enemy_coverage,enemy_size= enemy_size, **kwargs)
+
+        if damage_for_cover > 0 and e_cover:
+            e_cover.recive_damage(damage_for_cover)
 
         if total_attacks != 0:
             if c_ammo[0] != -1:
@@ -1087,6 +1130,58 @@ class ActorCombat:
         volume = volume if volume is not None else random.randint(10,150)
 
         Actor(self.id, data_manager=self.data_manager).make_sound(sound_id, volume)
+
+    def throw_grenade(self, enemy_id:int, **kwargs):
+        from ArbAmmo import Grenade
+
+        if kwargs.get('grenade_id', None) is not None:
+            current_grenade = self.get_current_grenades()[kwargs.get('grenade_id')]
+        else:
+            if self.check_character_owner() is not None:
+                return None
+            else:
+                grenades_types = [i.get('id') for i in self.data_manager.select_dict('AMMO', filter=f'caliber = "Граната"')]
+                current_grenade = Grenade(random.choice(grenades_types), data_manager=self.data_manager)
+
+        c_cost = 3
+
+        if c_cost > self.ap and not kwargs.get('provoked', None):
+            return None
+        elif kwargs.get('provoked', None):
+            pass
+        else:
+            self.ap_use(c_cost)
+
+        if self.melee_target_from:
+            self.attack_if_in_melee()
+            return None
+
+        if self.hunted_from:
+            self.attack_if_hunted()
+            return None
+
+        enemy = Actor(enemy_id, data_manager=self.data_manager)
+        distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
+        if distance_to_enemy > 60:
+            return None
+
+        main_target = [enemy_id]
+        maybe_damaged = []
+
+        e_cover = enemy.get_current_object()
+        if e_cover:
+            main_target += [i for i in e_cover.current_characters() if i != enemy_id]
+
+        current_delta = Actor(self.id, data_manager=self.data_manager).get_current_battle().distance_delta
+        current_layer = Actor(self.id, data_manager=self.data_manager).get_current_layer().id
+        grenade_layers = current_grenade.get_damaged_layers(current_delta, current_layer)
+
+        c_battle_layers_ids = Actor(self.id, data_manager=self.data_manager).get_current_battle().layers.keys()
+
+        for layer in grenade_layers:
+            if layer in c_battle_layers_ids:
+                maybe_damaged += Layer(layer, Actor(self.id, data_manager=self.data_manager).current_battle_id, data_manager=self.data_manager)
+
 
 
 class Actor:

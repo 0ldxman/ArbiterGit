@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from ArbDatabase import DataManager
 from ArbDamage import Damage, Penetration
 from ArbClothes import Clothes
-from ArbWeapons import Weapon
+from ArbAmmo import Grenade
+from ArbWeapons import Weapon, HandGrenade
 from ArbHealth import LocalBodyPart, Body, BodyPart
 from ArbSkills import CharacterAttributes
 from ArbCharacters import Race, Character
+from ArbRoll import TargetRoll
 import random
 
 
@@ -250,7 +252,7 @@ class RangeAttack:
 
         enemy_id = self.target
         total_damage = []
-
+        damage_for_cover = 0
         current_difficulty = self.get_shot_difficulty(c_weapon.ID)
         total_attacks = self.calculate_total_attacks(c_weapon.ID)
         c_current_ammo = self.get_current_ammo(c_weapon.ID)
@@ -264,13 +266,15 @@ class RangeAttack:
             if c_roll:
                 n_damage = self.combat_manager.calculate_total_damage(c_damages, enemy_id)
                 total_damage += n_damage
+            else:
+                damage_for_cover += c_damages['damage'].Damage
 
         if total_damage and enemy_id:
             self.combat_manager.recive_damage(enemy_id, total_damage)
 
         c_weapon_loud = c_weapon.total_noise()
 
-        return total_damage, total_attacks, c_weapon_loud
+        return total_damage, total_attacks, c_weapon_loud, damage_for_cover
 
 
 class MeleeAttack:
@@ -465,6 +469,27 @@ class BodyPartAttack:
             self.combat_manager.recive_damage(enemy_id, total_damage)
 
         return total_damage, total_attacks
+
+
+class Explosion:
+    def __init__(self, targets_list:list, may_be_damaged:list=None, **kwargs):
+        self.targets = targets_list
+        self.may_be_damaged = may_be_damaged if may_be_damaged else []
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.combat_manager = CombatManager(data_manager=self.data_manager)
+
+    def initiate(self, grenade: Grenade | HandGrenade, **kwargs):
+        enemies_id = self.targets
+        may_be_damaged = [TargetRoll(i, random.randint(1, 100)) for i in self.may_be_damaged]
+        total_damage = {}
+        damage_for_cover = 0
+
+        grenade_damage = grenade.detonate()
+        damage = grenade_damage['main_damage']
+        fragments_damage = grenade_damage['fragments_damage']
+        fragments_value = grenade_damage['fragments_value']
+
+
 
 
 class BallisticSimulation:

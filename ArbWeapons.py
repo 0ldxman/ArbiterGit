@@ -1,6 +1,6 @@
 from ArbDatabase import *
 from ArbItems import Item
-from ArbAmmo import Bullet, Ammunition
+from ArbAmmo import Bullet, Ammunition, Grenade
 from ArbDamage import Damage, Penetration
 
 
@@ -276,3 +276,9 @@ class WeaponAmmo:
 
     def get_current_bullets(self):
         return self.current_bullets
+
+class HandGrenade(Item, Grenade):
+    def __init__(self, item_id:int, **kwargs):
+        super().__init__(item_id, data_manager=kwargs.get('data_manager', DataManager()))
+        self.grenade_type = self.Type
+        super(Grenade, self).__init__(self.Type, data_manager=self.data_manager)
