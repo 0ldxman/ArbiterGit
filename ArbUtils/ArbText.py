@@ -7,18 +7,12 @@ from nltk.stem import WordNetLemmatizer
 from googletrans import Translator
 import spacy
 from pymystem3 import Mystem
-from natasha import (
-    Segmenter,
-    MorphVocab,
-    NewsSyntaxParser,
-    NewsEmbedding,
-    NewsMorphTagger,
-    Doc,
-    NamesExtractor,
-    NewsNERTagger
-)
+from nltk.util import ngrams
+from nltk import pos_tag
+
 from collections import Counter, defaultdict
 import itertools
+from transformers import pipeline
 
 
 
@@ -221,11 +215,11 @@ class TextAnalyzer:
         sia = SentimentIntensityAnalyzer()
         sentiment_vader = sia.polarity_scores(c_text)['compound']
         if sentiment_vader > 0.1:
-            return "pos"
+            return "pos", sentiment_vader
         elif sentiment_vader < -0.1:
-            return "neg"
+            return "neg", sentiment_vader
         else:
-            return "neu"
+            return "neu", sentiment_vader
 
     def extract_keywords(self, num_keywords=5):
         """
@@ -281,8 +275,8 @@ class TextAnalyzer:
         """
         clean_text = self.clean_text()
         words = word_tokenize(clean_text)
-        ngrams = [tuple(words[i:i + n]) for i in range(len(words) - n + 1)]
-        fdist = Counter(ngrams)
+        n_grams = list(ngrams(words, n))
+        fdist = FreqDist(n_grams)
         if num_ngrams:
             top_ngrams = fdist.most_common(num_ngrams)
             return top_ngrams
@@ -357,3 +351,141 @@ class TextAnalyzer:
         special_chunks = list(set(special_chunks))
 
         return special_chunks
+
+    def clean_new_text(self, text:str):
+        cleaned_text = re.sub(r'[^\w\s]', '', text)
+        return cleaned_text
+    def lemmatize(self, text:str, clean:bool=None):
+        if clean:
+            text = self.clean_new_text(text)
+
+        doc = self.nlp(text)
+        lemmatized_text = " ".join([token.lemma_ for token in doc])
+        return lemmatized_text
+
+    def lemmatized_special_tokens(self):
+        chunks = self.tokenize_special_chunks()
+        total_chunks = [self.lemmatize(chunk) for chunk in chunks]
+
+        return total_chunks
+
+class DialogueAnalyzer:
+    def __init__(self, text):
+        self.text = text
+        self.dialogues = []
+        self.actions = []
+        self.non_rp_phrases = []
+        self.describes = []
+        self.process_dialogue()
+
+    def process_dialogue(self):
+        lines = self.text.split('\n')
+        for line in lines:
+            # Удаляем лишние пробелы по краям
+            line = line.strip()
+
+            # Игнорируем пустые строки
+            if not line:
+                continue
+
+            # Нон РП фразы
+            non_rp_matches = re.findall(r'\(\((.*?)\)\)', line)
+            for match in non_rp_matches:
+                self.non_rp_phrases.append(match)
+
+            # Удаляем Нон РП фразы из основного текста
+            line = re.sub(r'\(\(.*?\)\)', '', line).strip()
+
+            #Описания
+            action_matches = re.findall(r'\*{3}(.*?)\*{3}', line)
+            for match in action_matches:
+                self.describes.append(match)
+
+            #удаляем описания
+            line = re.sub(r'\*{3}.*?\*{3}', '', line).strip()
+
+            # Действия персонажей
+            action_matches = re.findall(r'\*{1,2}(.*?)\*{1,2}', line)
+            for match in action_matches:
+                self.actions.append(match)
+
+            # Удаляем действия из основного текста
+            line = re.sub(r'\*{1,2}.*?\*{1,2}', '', line).strip()
+
+            # Оставшиеся фразы персонажей
+            if line:
+                self.dialogues.append(line)
+
+    def get_dialogues(self):
+        return self.dialogues
+
+    def get_actions(self):
+        return self.actions
+
+    def get_non_rp_phrases(self):
+        return self.non_rp_phrases
+
+    def extract_keywords(self, num_keywords=5):
+        text = ' '.join(self.dialogues)
+        words = word_tokenize(text)
+        words = [word.lower() for word in words if word.isalpha() and word.lower() not in stopwords.words('english')]
+        freq_dist = Counter(words)
+        return freq_dist.most_common(num_keywords)
+
+    def pos_tagging(self):
+        text = ' '.join(self.dialogues)
+        words = word_tokenize(text)
+        pos_tags = pos_tag(words)
+        return pos_tags
+
+    def special_tokenize(self):
+        c_dialogues = '. '.join(self.dialogues)
+        c_actions = '. '.join(self.actions)
+        c_describe = '. '.join(self.describes)
+
+        dia = TextAnalyzer(c_dialogues).tokenize_special_chunks()
+        act = TextAnalyzer(c_actions).tokenize_special_chunks()
+        desc = TextAnalyzer(c_describe).tokenize_special_chunks()
+
+        return dia + act + desc
+
+    def lemmatized_tokenize(self):
+        c_dialogues = '. '.join(self.dialogues)
+        c_actions = '. '.join(self.actions)
+        c_describe = '. '.join(self.describes)
+
+        dia = TextAnalyzer(c_dialogues).lemmatized_special_tokens()
+        act = TextAnalyzer(c_actions).lemmatized_special_tokens()
+        desc = TextAnalyzer(c_describe).lemmatized_special_tokens()
+
+        return dia + act + desc
+
+    def get_dict_of_sentiment(self):
+        phrases = self.dialogues + self.actions + self.describes
+        total_dict = {}
+        for phrase in phrases:
+            name, value = TextAnalyzer(phrase).sentiment_analysis()
+            total_dict[phrase] = value
+            print(value, phrase)
+
+        total_values = total_dict.values()
+        avg_value = sum(total_values) / len(total_values)
+
+        return avg_value, total_dict
+
+    def whole_text_sentiment(self):
+        return TextAnalyzer(self.text).sentiment_analysis()
+
+#
+# text = """
+# @краб помнишь февраль и то что было с моей тётей?
+# Вроде да, если я правильно понял о чем ты
+# Это когда её состояние стало хуже и ты сильно беспокоился?
+# Всеми силами и неправдой, она все же вышла в конце марта
+# Сейчас же её снова увезли на скорой
+# Я кончился
+# """
+# anal = DialogueAnalyzer(text)
+# print(anal.special_tokenize())
+# print(anal.get_dict_of_sentiment())
+# print(anal.whole_text_sentiment())
