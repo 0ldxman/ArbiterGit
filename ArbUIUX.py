@@ -50,12 +50,6 @@ class StandartEmbed():
     async def PinEmbed(self):
         return self.embed
 
-
-def chunks(c_list, n):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(c_list), n):
-        yield c_list[i:i + n]
-
 class Paginator(discord.ui.View):
     def __init__(self, embeds, interaction):
         super().__init__(timeout=None)
