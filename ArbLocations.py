@@ -202,7 +202,3 @@ class Location:
 
     def __repr__(self):
         return f'Location({self.id} {self.label})'
-
-
-
-print(ShortestPathFinder(1, 6).find_shortest_path_with_trails())
