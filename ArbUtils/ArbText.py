@@ -9,12 +9,15 @@ import spacy
 from pymystem3 import Mystem
 from nltk.util import ngrams
 from nltk import pos_tag
+import nltk
 
 from collections import Counter, defaultdict
 import itertools
+from summa import summarizer
+from gensim import corpora, models
+import pymorphy3
 from transformers import pipeline
-
-
+import torch
 
 
 
@@ -221,6 +224,17 @@ class TextAnalyzer:
         else:
             return "neu", sentiment_vader
 
+    def sentiment_amalysis_no_translate(self):
+        c_text = self.text
+        sia = SentimentIntensityAnalyzer()
+        sentiment_vader = sia.polarity_scores(c_text)['compound']
+        if sentiment_vader > 0.1:
+            return "pos", sentiment_vader
+        elif sentiment_vader < -0.1:
+            return "neg", sentiment_vader
+        else:
+            return "neu", sentiment_vader
+
     def extract_keywords(self, num_keywords=5):
         """
         Извлекает ключевые слова из текста.
@@ -263,67 +277,59 @@ class TextAnalyzer:
 
     def pos_tagging(self):
         """
-        Определяет части речи каждого слова в тексте.
+        Определяет части речи каждого слова в тексте используя NLTK pos_tag.
         """
-        doc = self.nlp(self.text)
-        pos_tags = [(token.text, token.pos_) for token in doc]
+        words = self.word_tokenize()
+        pos_tags = pos_tag(words)
         return pos_tags
 
     def extract_ngrams(self, n=2, num_ngrams=None):
         """
-        Анализирует наиболее часто встречающиеся биграммы и триграммы в тексте.
+        Анализирует и извлекает наиболее часто встречающиеся биграммы
+        и триграммы в тексте используя NLTK ngrams и Counter.
         """
-        clean_text = self.clean_text()
-        words = word_tokenize(clean_text)
+        words = self.word_tokenize()
         n_grams = list(ngrams(words, n))
-        fdist = FreqDist(n_grams)
+        fdist = Counter(n_grams)
         if num_ngrams:
             top_ngrams = fdist.most_common(num_ngrams)
-            return top_ngrams
         else:
-            return list(fdist.items())
+            top_ngrams = list(fdist.items())
 
-    def extract_entities_from_ngrams(self, n=2, num_ngrams=None, min_freq=2):
+        return top_ngrams
+
+    def extract_entities_from_ngrams(self, n=2, num_ngrams=None, min_freq=1):
         ngrams = self.extract_ngrams(n, num_ngrams)
         entities = []
-        for ngram in ngrams:
-            # Определяем, является ли данная n-грамма значимой
-            if ngram[1] >= min_freq:
-                filtered_ngram = [word.lower() for word in ngram[0] if word.isalpha()]
-                ngram_text = ' '.join(filtered_ngram)
-                entity_type = self.detect_entity_type(ngram_text)
+
+        for ngram, freq in dict(ngrams).items():
+            ngram_words = [word.lower() for word in ngram if word.isalpha()]
+            if len(ngram_words) == n and freq >= min_freq:
+                entity_text = ' '.join(ngram_words)
+                entity_type = self.detect_entity_type(entity_text)
                 if entity_type:
-                    entities.append((ngram_text, entity_type))
-                print(filtered_ngram, entities)
+                    entities.append(entity_type)
 
         return entities
 
     def detect_entity_type(self, text):
-        # Проверяем, есть ли результат для данного текста в кэше
         if text in self.cache:
             return self.cache[text]
 
-        lemmatized_text = ''.join(self.mystem.lemmatize(text))
-        lemmatized_doc = self.nlp(lemmatized_text)
-        lemmatized_entities = [(ent.text.strip().lower(), ent.label_) for ent in lemmatized_doc.ents]
+        lemmatized_text = self.lemmatize(text)
+        lemmatized_entities = self.nlp(lemmatized_text).ents
 
-        # Проверяем, найдены ли какие-либо сущности
-        entity_type = lemmatized_entities
-        # Сохраняем результат в кэшей   21
-        self.cache[text] = entity_type
+        entity_type_dict = {}
+        for ent in lemmatized_entities:
+            entity_type_dict[ent.text.strip().lower()] = ent.label_
 
-        return entity_type
+        self.cache[text] = entity_type_dict
+        return entity_type_dict
 
     def extract_entities_from_key_tokens(self):
-        key_sentences = self.tokenize_special_chunks()
-        lemmatized_chunks = []
-        for chunk in key_sentences:
-            doc_chunk = self.nlp(chunk)
-            lemmatized_chunk = " ".join([token.lemma_ for token in doc_chunk])
-            lemmatized_chunks.append(lemmatized_chunk)
-        print(lemmatized_chunks)
         entities = []
-
+        lemmatized_chunks = self.tokenize_special_chunks()
+        print(lemmatized_chunks)
         for sentence in lemmatized_chunks:
             # Определяем, является ли данная фраза сущностью
             entity_type = self.detect_entity_type(sentence)
@@ -355,6 +361,7 @@ class TextAnalyzer:
     def clean_new_text(self, text:str):
         cleaned_text = re.sub(r'[^\w\s]', '', text)
         return cleaned_text
+
     def lemmatize(self, text:str, clean:bool=None):
         if clean:
             text = self.clean_new_text(text)
@@ -369,13 +376,36 @@ class TextAnalyzer:
 
         return total_chunks
 
+    def extract_entities(self):
+        entities = nltk.ne_chunk(nltk.pos_tag(nltk.word_tokenize(self.text)))
+        return entities
+
+    def summarize_text(self, ratio:float=0.3):
+        summary = summarizer.summarize(self.text, ratio=ratio)
+        return summary
+
+    def train_semantic_model(self):
+        sentences = [word_tokenize(sentence) for sentence in sent_tokenize(self.text)]
+        self.semantic_model = models.Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+        return self.semantic_model
+
+    def get_similarity(self, word1, word2):
+        if self.semantic_model:
+            return self.semantic_model.wv.similarity(word1, word2)
+        else:
+            return None
+
+
 class DialogueAnalyzer:
     def __init__(self, text):
         self.text = text
+        self.english_text = TextTranslator(text).translate_to_english()
         self.dialogues = []
         self.actions = []
         self.non_rp_phrases = []
         self.describes = []
+
         self.process_dialogue()
 
     def process_dialogue(self):
@@ -460,32 +490,148 @@ class DialogueAnalyzer:
 
         return dia + act + desc
 
-    def get_dict_of_sentiment(self):
-        phrases = self.dialogues + self.actions + self.describes
+    def remove_double_parentheses(self, text):
+        """
+        Удаляет текст, заключенный в (( )), вместе с самими (( )).
+        """
+        clean_text = re.sub(r'\(\(.*?\)\)', '', text)
+        return clean_text
+
+    def sentiment_special_tokenize(self):
         total_dict = {}
-        for phrase in phrases:
-            name, value = TextAnalyzer(phrase).sentiment_analysis()
-            total_dict[phrase] = value
-            print(value, phrase)
+        sentences = self.special_tokenize()
+
+        neutral_diff = 0
+        sia = SentimentIntensityAnalyzer()
+
+        for phrase in sentences:
+            translated_phrase = TextTranslator(phrase).translate_to_english()
+            sentiment_vader = sia.polarity_scores(translated_phrase)['compound']
+            if sentiment_vader == 0:
+                total_dict[phrase] = sentiment_vader
+                neutral_diff += 1
+            else:
+                total_dict[phrase] = sentiment_vader
 
         total_values = total_dict.values()
-        avg_value = sum(total_values) / len(total_values)
+        total_non_neutral = len(total_values) - neutral_diff
+        avg_value = sum(total_values) / total_non_neutral if total_non_neutral > 0 else 0
+
+        return avg_value, total_dict
+
+    def get_dict_of_sentiment(self):
+        total_dict = {}
+        sentences = nltk.sent_tokenize(self.remove_double_parentheses(self.english_text))
+
+        rus_sentences = nltk.sent_tokenize(self.remove_double_parentheses(self.text))
+        print(sentences)
+        neutral_diff = 0
+        sia = SentimentIntensityAnalyzer()
+        indx = 0
+        for phrase in sentences:
+            sentiment_vader = sia.polarity_scores(phrase)['compound']
+            if sentiment_vader == 0:
+                total_dict[rus_sentences[indx]] = sentiment_vader
+                neutral_diff += 1
+            else:
+                total_dict[rus_sentences[indx]] = sentiment_vader
+            indx += 1
+
+        total_values = total_dict.values()
+        total_non_neutral = len(total_values) - neutral_diff
+        avg_value = sum(total_values) / total_non_neutral if total_non_neutral > 0 else 0
 
         return avg_value, total_dict
 
     def whole_text_sentiment(self):
-        return TextAnalyzer(self.text).sentiment_analysis()
+        sia = SentimentIntensityAnalyzer()
+        sentiment_vader = sia.polarity_scores(self.english_text)['compound']
+        return sentiment_vader
 
-#
+    def text_sentiment(self):
+        on_sentence_value = self.get_dict_of_sentiment()[0]
+        whole_text_value = self.whole_text_sentiment()
+
+        return (on_sentence_value + whole_text_value) / 2
+
+
+class TopicModeler:
+    def __init__(self, method='LDA', num_topics=5, additional_stopwords=None, min_word_freq=2):
+        self.method = method
+        if method == 'LDA':
+            self.model = models.LdaModel
+        elif method == 'NMF':
+            self.model = models.Nmf
+
+        self.num_topics = num_topics
+        self.dictionary = None  # создаем атрибут для хранения словаря
+        self.stop_words = set(stopwords.words('russian')) # загружаем русские стоп-слова
+        self.stop_words.update({'однако', 'вскоре', 'который', 'которые', 'время', 'лишь', 'полностью', 'этот', 'этому', 'это', 'её', 'его', 'их', 'этот','ещё'})
+        if additional_stopwords:
+            self.stop_words.update(additional_stopwords)
+        self.min_word_freq = min_word_freq
+        self.morph = pymorphy3.MorphAnalyzer()  # инициализация анализатора
+
+    def fit_model_text(self, text: str):
+        documents = [self.preprocess_text(doc) for doc in text.split('\n')]
+        self.dictionary = corpora.Dictionary(documents)  # сохраняем словарь
+
+        # Фильтрация редких слов
+        self.dictionary.filter_extremes(no_below=self.min_word_freq)
+
+        corpus = [self.dictionary.doc2bow(doc) for doc in documents]
+
+        self.topic_model = self.model(corpus, num_topics=self.num_topics)
+
+        topics = self.topic_model.print_topics(num_topics=self.num_topics)
+
+        formatted_topics = self.format_topics(topics)
+
+        for formatted_topic in formatted_topics:
+            print(formatted_topic)
+
+        return self.print_topic_words()
+
+    def preprocess_text(self, text: str):
+        text = text.lower()
+        #text = re.sub(r'\d+', '', text)  # удаляем цифры
+        text = re.sub(r'[^\w\s]', '', text)  # удаляем пунктуацию
+        tokens = nltk.tokenize.word_tokenize(text)
+        tokens = [self.morph.parse(word)[0].normal_form for word in tokens if word not in self.stop_words and len(word) > 1]
+        return tokens
+
+    def format_topics(self, topics: list):
+        formatted_topics = []
+        for topic in topics:
+            topic_id, words = topic
+            topic_str = f"Topic {topic_id}: "
+            words_weights = [word.split("*") for word in words.split(" + ")]
+            words = [self.dictionary[int(float(word_weight[1].strip().strip("\"")))] for word_weight in words_weights]
+            topic_str += ", ".join(words)
+            formatted_topics.append(topic_str)
+        return formatted_topics
+
+    def print_topic_words(self):
+        topics = []
+
+        for idx in range(self.num_topics):
+            topic_words = [self.dictionary[int(word_id)] for word_id, _ in self.topic_model.get_topic_terms(idx, topn=10)]
+            topics.append(f"Topic {idx}: {', '.join(topic_words)}")
+
+        return topics
+
+
 # text = """
-# @краб помнишь февраль и то что было с моей тётей?
-# Вроде да, если я правильно понял о чем ты
-# Это когда её состояние стало хуже и ты сильно беспокоился?
-# Всеми силами и неправдой, она все же вышла в конце марта
-# Сейчас же её снова увезли на скорой
-# Я кончился
+# Родился и вырос на острове Андросс, в 16 лет в составе миротворческого ОДКБ принимал участие в гражданской войне на Андроссе, участник гражданской войны на Таноассе, по завершению которой был зачислен в звании подполковника в ВСАТ. Позже участвовал в составе сил NATO на учениях в Ливонии. С началом конфликта Аполлона и Эдема был отправлен в качестве инструктора на Панаму, после вторжения Эдема в страну присоединился к партизанам, позже был вынужден бежать из страны. В ходе побега был пойман пограничниками Коста-Рики, полгода сидел в местной тюрьме, затем сбежал, вновь оказавшись в Панаме, быстро был пленен и доставлен на допрос к прокуратору, в ходе которого лишился глаза. Позже был спасён из плена силами ОМОГ и морпехов под командованием Зорге. Участвовал в битве за Панама-сити, в битве за Колон, приложил руку к убийству Максимуса. Затем участвовал в операциях по зачистке комплексов "Viper" в Латинской Америке, в ходе которой участвовал в битве с Яном, лишился второго глаза и застал гибель Цезаря. С окончанием боевых действий в Панаме был прикомандирован к ОТГ "Звезда" в составе которой участвовал в боевых действиях в Тихом Океане. Был известен своим немалым боевым опытом, высокой точностью стрельбы, хорошими навыками маскировки, надёжностью и готовностью постоять за товарищей, импульсивным характером, склонностью к нарушению дисциплины, беспощадностью к врагам, а так же пристрастием к алкоголю. Среди сослуживцев о нем было смешанное мнение, одни называли его отличным бойцом и командиром, другие, напротив, отзывались о нем, как о смутьяне, что везде сеет хаос. Среди друзей наиболее близкими были Рихард Зорге, Гиви и Евгений Соболь.
 # """
+#
+# anal = TextAnalyzer(text)
+# print(anal.summarize_text())
+# mod = TopicModeler().fit_model_text(text)
+# print(mod)
+#
 # anal = DialogueAnalyzer(text)
 # print(anal.special_tokenize())
 # print(anal.get_dict_of_sentiment())
 # print(anal.whole_text_sentiment())
+# print(anal.sentiment_special_tokenize())
