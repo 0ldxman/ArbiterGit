@@ -16,9 +16,6 @@ import itertools
 from summa import summarizer
 from gensim import corpora, models
 import pymorphy3
-from transformers import pipeline
-import torch
-
 
 
 class TextChunker:
