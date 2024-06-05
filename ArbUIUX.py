@@ -2,6 +2,7 @@ from ArbDatabase import DataManager
 import discord
 from discord.ext import commands
 
+
 class StandartEmbed():
     def __init__(self, title:str=None, desc:str=None, values:list=None, rgb_code:tuple=None, picture_url:str=None, avatar_url:str=None, footer:str=None):
         self.title = title or ''

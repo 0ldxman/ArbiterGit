@@ -6,7 +6,7 @@ import threading
 import logging
 from typing import TypedDict, Any, TextIO
 import json
-import mysql.connector
+import psycopg2
 
 # db = mysql.connector.connect(
 #     host='localhost',
@@ -324,4 +324,6 @@ class DataManager:
     #    self.cursor.close()
     #    self.commit_transaction()
         self.connection_pool.release_connection(self.connection)
+
+
 

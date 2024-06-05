@@ -96,7 +96,6 @@ class Character:
         else:
             return self.character_characteristics()[characteristic]
 
-
     def character_skills(self, skill:str=None):
         c_pars = self.data_manager.select_dict('CHARS_SKILLS',filter=f'id = {self.ID}')
         total_chars = {}
@@ -517,4 +516,70 @@ class CharacterCombat:
         return total_damage, total_attacks
 
     def vehicle_attack(self):
+        pass
+
+
+
+class InterCharacter:
+    def __init__(self, character_id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.id = character_id
+
+        data = self.fetch_character_data()
+        self.custom_id = data.get('custom_id', self.id)
+        self.owner = data.get('owner', None)
+        self.callsign = data.get('callsign', '')
+        self.age = data.get('age', 30)
+        self.race = data.get('race', 'Human')
+        self.sex = data.get('sex', 'Неизвестно')
+
+        self.org = data.get('org', None)
+        self.org_lvl = data.get('org_lvl', None)
+        self.frac = data.get('frac', None)
+        self.frac_lvl = data.get('frac_lvl', None)
+
+        self.avatar = data.get('avatar', None)
+        self.updated = data.get('update', None)
+        self.server = data.get('server', None)
+
+    def fetch_character_data(self):
+        if self.data_manager.check('CHARS_INIT', f'id = {self.id}'):
+            return self.data_manager.select_dict('CHARS_INIT',filter=f'id = {self.id}')[0]
+        else:
+            return {}
+
+    def fetch_race_data(self):
+        pass
+
+    def fetch_health_data(self):
+        pass
+
+    def fetch_combat_data(self):
+        pass
+
+    def fetch_inventory_data(self):
+        pass
+
+    def fetch_gears_data(self):
+        pass
+
+    def fetch_location_data(self):
+        pass
+
+    def fetch_memories(self):
+        pass
+
+    def fetch_relations(self):
+        pass
+
+    def fetch_worldview(self):
+        pass
+
+    def fetch_group_data(self):
+        pass
+
+    def fetch_progress(self):
+        pass
+
+    def fetch_skills(self):
         pass
