@@ -493,9 +493,5 @@ class NewCharacter:
                 ItemManager(c_item['id'], character_id=self.id, slot=c_item.get('slot', None))
 
 
-start = datetime.datetime.now()
-pprint.pprint(NewCharacter().insert_data())
-print(datetime.datetime.now() - start)
-
 #for _ in range(25):
 #    print(WordGenerator().new_word(2).capitalize(), WordGenerator().new_word(2).capitalize())

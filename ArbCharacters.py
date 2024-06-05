@@ -133,7 +133,7 @@ class Character:
         c_tables = self.data_manager.get_tables_with_prefix('CHARS_')
         c_tables += ['BATTLE_CHARACTERS', 'CHASE_CHARACTERS', 'STEALTH_CHARACTERS']
 
-        for table in self.data_manager.get_tables_with_prefix('CHARS_'):
+        for table in c_tables:
             c_columns = self.data_manager.get_all_columns(table)
             if 'id' or 'character_id' in c_columns:
                 if 'id' in c_columns:

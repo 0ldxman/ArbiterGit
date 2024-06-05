@@ -4,26 +4,21 @@ from discord.ext import commands
 
 class StandartEmbed():
     def __init__(self, title:str=None, desc:str=None, values:list=None, rgb_code:tuple=None, picture_url:str=None, avatar_url:str=None, footer:str=None):
-        self.title = ''
-        self.desc = ''
-        self.values = []
-        self.rgb = (43, 45, 49)
+        self.title = title or ''
+        self.desc = desc or ''
+        self.values = values or []
+        self.rgb = rgb_code or (43, 45, 49)
 
-        if title:
-            self.title = title
-        if desc:
-            self.desc = desc
-        if rgb_code:
-            self.rgb = rgb_code
+        self.embed = discord.Embed(title=self.title,
+                                   color=discord.Color.from_rgb(*self.rgb),
+                                   description=self.desc)
 
-        self.embed = discord.Embed(title=f'{self.title}',
-                            color=discord.Color.from_rgb(self.rgb[0], self.rgb[1], self.rgb[2]),
-                            description=f'{self.desc}')
-        if values:
-            for c_value in values:
-                self.embed.add_field(name=c_value[0],
-                                     value=c_value[1],
-                                     inline=c_value[2])
+        self.picture_url = picture_url
+        self.avatar_url = avatar_url
+        self.footer = footer
+
+        for c_value in self.values:
+            self.embed.add_field(name=c_value[0], value=c_value[1], inline=c_value[2])
 
         if picture_url:
             self.embed.set_image(url=picture_url)
@@ -34,31 +29,101 @@ class StandartEmbed():
         if footer:
             self.embed.set_footer(text=footer)
 
-    def AddField(self, name:str, value:str, inline:bool=False):
+    def add_field(self, name:str, value:str, inline:bool=False):
         self.embed.add_field(name=name, value=value, inline=inline)
 
-    def SetAvatar(self, avatar_url:str):
+    def set_avatar(self, avatar_url:str):
         self.embed.set_thumbnail(url=avatar_url)
 
     def set_footer(self, text:str=None, url_str:str=None):
+        self.embed.set_footer(text=text or '', icon_url=url_str)
 
-        if not text:
-            text = ''
+    def set_title(self, title:str):
+        self.title = title
+        self.embed.title = title
 
-        self.embed.set_footer(text=text,icon_url=url_str)
+    def set_description(self, desc:str):
+        self.desc = desc
+        self.embed.description = desc
 
-    async def PinEmbed(self):
+    def set_color(self, rgb_code: tuple):
+        self.rgb = rgb_code
+        self.embed = discord.Embed(title=self.title,
+                                   color=discord.Color.from_rgb(*self.rgb),
+                                   description=self.desc)
+
+        for c_value in self.values:
+            self.embed.add_field(name=c_value[0], value=c_value[1], inline=c_value[2])
+
+        if self.picture_url:
+            self.embed.set_image(url=self.picture_url)
+
+        if self.avatar_url:
+            self.embed.set_thumbnail(url=self.avatar_url)
+
+        if self.footer:
+            self.embed.set_footer(text=self.footer)
+
+    def get_embed(self):
         return self.embed
 
+# class Paginator(discord.ui.View):
+#     def __init__(self, embeds, interaction):
+#         super().__init__(timeout=None)
+#         self.embeds = embeds
+#         self.interaction = interaction
+#         self.offset = 0
+#
+#         for emb in self.embeds:
+#             emb.set_footer(text=f'Страница {self.embeds.index(emb) + 1}/{len(self.embeds)}')
+#
+#     async def update_button(self):
+#         offset = self.offset
+#         is_first_page = offset == 0
+#         is_last_page = offset == len(self.embeds)-1
+#
+#         self.back.disabled = is_first_page
+#         self.forward.disabled = is_last_page
+#
+#     async def interaction_check(self, interaction: discord.MessageInteraction):
+#         if self.interaction.author.id != interaction.user.id:
+#             return await interaction.response.send_message(f'{interaction.user.mention} Вы не можете это использовать', ephemeral=True)
+#         return True
+#
+#     @discord.ui.button(label='<', style=discord.ButtonStyle.secondary)
+#     async def back(self, _, interaction: discord.MessageInteraction):
+#         self.offset -= 1
+#         await self.update_button()
+#         await interaction.response.edit_message(embed=self.embeds[self.offset], view=self)
+#
+#     @discord.ui.button(label='Закрыть', style=discord.ButtonStyle.danger)
+#     async def close(self, _, interaction: discord.Interaction):
+#         await interaction.response.defer()
+#         await interaction.delete_original_response()
+#
+#     @discord.ui.button(label='>', style=discord.ButtonStyle.secondary)
+#     async def forward(self, _, interaction: discord.MessageInteraction):
+#         self.offset += 1
+#         await self.update_button()
+#         await interaction.response.edit_message(embed=self.embeds[self.offset], view=self)
+#
+
 class Paginator(discord.ui.View):
-    def __init__(self, embeds, interaction):
+    def __init__(self, embeds, interaction, page_names=None):
         super().__init__(timeout=None)
         self.embeds = embeds
         self.interaction = interaction
         self.offset = 0
+        self.page_names = page_names if page_names else {}
+        self.default_button_names = ['<', '>']
 
         for emb in self.embeds:
-            emb.set_footer(text=f'Страница {self.embeds.index(emb) + 1}/{len(self.embeds)}')
+            emb.set_footer(text=self.get_footer_text(self.embeds.index(emb) + 1))
+
+    def get_footer_text(self, page_number):
+        if page_number in self.page_names:
+            return f'{self.page_names[page_number]} {page_number}/{len(self.embeds)}'
+        return f'Страница {page_number}/{len(self.embeds)}'
 
     async def update_button(self):
         offset = self.offset
@@ -68,10 +133,20 @@ class Paginator(discord.ui.View):
         self.back.disabled = is_first_page
         self.forward.disabled = is_last_page
 
+        self.back.label = self.page_names.get(offset, self.default_button_names[0]) if not is_first_page else self.default_button_names[0]
+        self.forward.label = self.page_names.get(offset+2, self.default_button_names[1]) if not is_last_page else self.default_button_names[1]
+
+
+
     async def interaction_check(self, interaction: discord.MessageInteraction):
         if self.interaction.author.id != interaction.user.id:
             return await interaction.response.send_message(f'{interaction.user.mention} Вы не можете это использовать', ephemeral=True)
         return True
+
+    async def go_to_page(self, offset: int):
+        self.offset = offset
+        await self.update_button()
+        await self.interaction.response.edit_message(embed=self.embeds[self.offset], view=self)
 
     @discord.ui.button(label='<', style=discord.ButtonStyle.secondary)
     async def back(self, _, interaction: discord.MessageInteraction):
