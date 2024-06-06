@@ -551,8 +551,12 @@ class InterCharacter:
     def fetch_race_data(self):
         pass
 
+
     def fetch_health_data(self):
-        pass
+        injury_text = self.data_manager.select_dict(f'CHARS_INJURY', filter=f'id = {self.id}')
+        diseses_text = self.data_manager.select_dict(f'CHARS_DISEASE', filter=f'id = {self.id}')
+        return injury_text, diseses_text
+        
 
     def fetch_combat_data(self):
         pass

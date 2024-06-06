@@ -17,3 +17,4 @@ summa==1.2.0
 text2num==2.5.1
 vaderSentiment==3.3.2
 vaderSentiment==3.3.2
+psycopg2-binary
