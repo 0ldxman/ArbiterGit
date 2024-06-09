@@ -1,39 +1,51 @@
 from ArbDatabase import DataManager
 import discord
 from discord.ext import commands
+from dataclasses import dataclass
+
+@dataclass()
+class EmbedRow:
+    title: str | None
+    value: str | None
+    inline: bool | None
 
 
-class StandartEmbed():
-    def __init__(self, title:str=None, desc:str=None, values:list=None, rgb_code:tuple=None, picture_url:str=None, avatar_url:str=None, footer:str=None):
-        self.title = title or ''
-        self.desc = desc or ''
-        self.values = values or []
-        self.rgb = rgb_code or (43, 45, 49)
+class ArbEmbed:
+    def __init__(self, title:str=None, desc:str=None, **kwargs):
+        self.title = title if title else ''
+        self.desc = desc if desc else ''
+
+        self.rgb = kwargs.get('rgb_code') if 'rgb_code' in kwargs else (43, 45, 49)
+        self.logo = kwargs.get('logo_url') if 'logo_url' in kwargs else None
+        self.picture = kwargs.get('picture') if 'picture' in kwargs else None
+        self.footer = kwargs.get('footer') if 'footer' in kwargs else None
+        self.footer_logo = kwargs.get('footer_logo') if 'footer_logo' in kwargs else None
 
         self.embed = discord.Embed(title=self.title,
-                                   color=discord.Color.from_rgb(*self.rgb),
+                                   colour=discord.Color.from_rgb(*self.rgb),
                                    description=self.desc)
 
-        self.picture_url = picture_url
-        self.avatar_url = avatar_url
-        self.footer = footer
+        if self.picture:
+            self.embed.set_image(url=self.picture)
 
-        for c_value in self.values:
-            self.embed.add_field(name=c_value[0], value=c_value[1], inline=c_value[2])
+        if self.logo:
+            self.embed.set_thumbnail(url=self.logo)
 
-        if picture_url:
-            self.embed.set_image(url=picture_url)
+        if self.footer or self.footer_logo:
+            self.embed.set_footer(text=self.footer, icon_url=self.footer_logo)
 
-        if avatar_url:
-            self.embed.set_thumbnail(url=avatar_url)
 
-        if footer:
-            self.embed.set_footer(text=footer)
+        self.rows: list[EmbedRow] = kwargs.get('rows') if 'rows' in kwargs else []
 
-    def add_field(self, name:str, value:str, inline:bool=False):
+        for row in self.rows:
+            self.embed.add_field(name=row.title if row.title is not None else '‎',
+                                 value=row.value if row.value is not None else '',
+                                 inline= row.inline if row.inline is not None else False)
+
+    def add_row(self, name:str, value:str, inline:bool=False):
         self.embed.add_field(name=name, value=value, inline=inline)
 
-    def set_avatar(self, avatar_url:str):
+    def set_logo(self, avatar_url:str):
         self.embed.set_thumbnail(url=avatar_url)
 
     def set_footer(self, text:str=None, url_str:str=None):
@@ -53,20 +65,56 @@ class StandartEmbed():
                                    color=discord.Color.from_rgb(*self.rgb),
                                    description=self.desc)
 
-        for c_value in self.values:
-            self.embed.add_field(name=c_value[0], value=c_value[1], inline=c_value[2])
+        for row in self.rows:
+            self.embed.add_field(name=row.title if row.title is not None else '',
+                                 value=row.value if row.value is not None else '',
+                                 inline=row.inline if row.inline is not None else False)
 
-        if self.picture_url:
-            self.embed.set_image(url=self.picture_url)
+        if self.picture:
+            self.embed.set_image(url=self.picture)
 
-        if self.avatar_url:
-            self.embed.set_thumbnail(url=self.avatar_url)
+        if self.logo:
+            self.embed.set_thumbnail(url=self.logo)
 
         if self.footer:
-            self.embed.set_footer(text=self.footer)
+            self.embed.set_footer(text=self.footer, icon_url=self.footer_logo)
 
     def get_embed(self):
         return self.embed
+
+    def to_dict(self):
+        return self.embed.to_dict()
+
+
+class SuccessEmbed(ArbEmbed):
+    def __init__(self, title: str=None, desc:str=None, **kwargs):
+        super().__init__(title, desc, **kwargs)
+        success_color = (87, 242, 135)
+        self.set_color(success_color)
+
+
+class ErrorEmbed(ArbEmbed):
+    def __init__(self, title: str=None, desc:str=None, **kwargs):
+        super().__init__(title, desc, **kwargs)
+        error_color = (237, 66, 69)
+        self.set_color(error_color)
+
+class HealthEmbed(ArbEmbed):
+    def __init__(self, title: str=None, desc:str=None, damage:int=None, **kwargs):
+        super().__init__(title, desc, **kwargs)
+        start_point = (153, 184, 152)
+        end_point = (232, 74, 95)
+
+        damage = damage/100 if damage else 0
+
+        avg_point = (end_point[0]-start_point[0], end_point[1]-start_point[1], end_point[2]-start_point[2])
+
+        total_code = (end_point[0]-round(avg_point[0]*damage), end_point[1]-round(avg_point[1]*damage), end_point[2]-round(avg_point[2]*damage))
+
+        self.set_color(total_code)
+
+
+
 
 # class Paginator(discord.ui.View):
 #     def __init__(self, embeds, interaction):

@@ -8,7 +8,7 @@ from ArbDatabase import DataManager
 file = open('config.json', 'r')
 config = json.load(file)
 bot = commands.Bot(command_prefix=commands.when_mentioned_or(config['prefix']), intents=discord.Intents.all())
-API_KEY = 'MTE4MDQ1NDcwMjAxODcyMzg3MA.GI9Vf2.0f68g4twG0a6azO7Zxu-e8EG6vKwkxVtI14zPo'
+API_KEY = 'MTE4MDQ1NDcwMjAxODcyMzg3MA.GNSt2X.hi7fmdV8OchjmK_qho_PGXmFCYf_0NQWKuG0sA'
 
 
 @bot.event

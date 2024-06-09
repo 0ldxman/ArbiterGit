@@ -97,8 +97,10 @@ class BodyPart:
 
         if self.data_manager.check('RACES_BODY', f'part_id = "{self.ID}"'):
             self.data_table = 'RACES_BODY'
+            self.id_label = 'part_id'
         else:
             self.data_table = 'IMPLANTS_INIT'
+            self.id_label = 'id'
 
         data = self.fetch_data()
 
@@ -116,14 +118,14 @@ class BodyPart:
         self.IsImplant = self.data_table == 'IMPLANTS_INIT'
         self.WeaponSlots = data.get('weapon_slot', 0)
 
-    def fetch_data(self) -> dict:
-        columns = ['label', 'name', 'internal', 'linked', 'target_weight', 'health', 'scar_chance', 'fatality',
-                   'bleed_factor', 'capacity', 'efficiency', 'weapon_slot']
-        data = {}
+        self.can_replace = data.get('can_replace', None)
 
-        for col in columns:
-            data[col] = self.data_manager.selectOne(self.data_table, columns=col, filter=f'part_id = "{self.ID}"')[0]
-        return data
+
+    def fetch_data(self) -> dict:
+        if self.data_manager.check(self.data_table, filter=f'{self.id_label} = "{self.ID}"') is None:
+            return {}
+        else:
+            return self.data_manager.select_dict(self.data_table, filter=f'{self.id_label} = "{self.ID}"')[0]
 
     def get_internal_organs(self):
         organ_table = "RACES_BODY"  # Предположим, что есть таблица с информацией об органах
@@ -221,11 +223,13 @@ class BodyPart:
 
 
 class LocalBodyPart(BodyPart):
-    def __init__(self, char_id: int, part_id: str, *, data_manager=None):
-        super().__init__(part_id, data_manager=data_manager)
+    def __init__(self, char_id: int, part_id: str, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        super().__init__(part_id, data_manager=self.data_manager)
         self.CharID = char_id
         self.CurrentHealth = self.Health
-        self.data_manager = data_manager if data_manager else DataManager()
+        self.Place = kwargs.get('place', None)
+        self.Label = kwargs.get('label', self.Label)
 
         self.process_injuries()
         self.calculate_efficiency()
@@ -233,6 +237,7 @@ class LocalBodyPart(BodyPart):
 
         self.injuries = []
         self.fetch_injuries()
+        self.diseases = self.fetch_diseases()
 
     def process_injuries(self):
         injuries = self.data_manager.select('CHARS_INJURY', columns='id_inj', filter=f'id = {self.CharID} AND place = "{self.ID}"')
@@ -244,21 +249,28 @@ class LocalBodyPart(BodyPart):
     def fetch_injuries(self):
         injury_data = self.data_manager.select('CHARS_INJURY',columns='id_inj', filter=f'place = "{self.ID}" AND id = {self.CharID}')
         for data in injury_data:
-            new_injury = LocalInjury(data[0], self.CharID,data_manager=self.data_manager)
+            new_injury = LocalInjury(data[0], self.CharID, data_manager=self.data_manager)
             self.injuries.append(new_injury)
 
     def calculate_efficiency(self):
         if self.Efficiency > 0:
             self.CurrentEfficiency = self.Efficiency * (self.CurrentHealth / self.Health)
+            if self.CurrentEfficiency < 0:
+                self.CurrentEfficiency = 0
+
         else:
             if self.CurrentHealth == self.Health:
                 self.CurrentEfficiency = 0
             else:
                 self.CurrentEfficiency = self.Efficiency * ((self.Health - self.CurrentHealth) / self.Health)
 
+    def part_health(self):
+        health = self.CurrentHealth/self.Health if self.Health > 0 else 0
+        return health if health > 0 else 0
+
     def process_illnesses(self):
-        diseases = self.data_manager.select('CHARS_DISEASE', columns='dis_id', filter=f'id = {self.CharID}')
-        if diseases:
+        diseases = self.data_manager.select('CHARS_DISEASE', columns='dis_id', filter=f'id = {self.CharID} AND (place = "{self.ID}" OR place = "All")')
+        if diseases and not self.IsImplant:
             for disease_id in diseases:
                 disease = LocalDisease(data_manager=self.data_manager, dis_id=disease_id[0], char_id=self.CharID)
                 if disease.Place == self.ID:
@@ -266,9 +278,22 @@ class LocalBodyPart(BodyPart):
                 if disease.Capacity == self.Capacity:
                     self.CurrentEfficiency -= disease.Severity * disease.Effect
 
+    def fetch_diseases(self):
+        total_list = []
+        diseases = self.data_manager.select_dict('CHARS_DISEASE', filter=f'id = {self.CharID} and (place = "{self.ID}" OR place = "All")')
+        if diseases and not self.IsImplant:
+            for disease_id in diseases:
+                disease = LocalDisease(data_manager=self.data_manager, dis_id=disease_id.get('dis_id'), char_id=self.CharID)
+                total_list.append(disease)
+
+        return total_list
+
     def calculate_bleeding(self):
-        total_bleeding = sum(injury.Bleed for injury in self.injuries) * self.BleedFactor
-        return max(0, total_bleeding)
+        if not self.IsImplant:
+            total_bleeding = sum(injury.Bleed for injury in self.injuries) * self.BleedFactor
+            return max(0, total_bleeding)
+        else:
+            return 0
 
     def calculate_pain(self):
         total_pain = 0
@@ -290,6 +315,16 @@ class LocalBodyPart(BodyPart):
         else:
             return self.attacks()
 
+    def get_root_partlabel(self):
+        if not self.IsImplant:
+            return None
+        else:
+            if self.data_manager.check('CHARS_BODY',f'id = {self.CharID} AND imp_id = {self.ID}') is None:
+                return None
+            else:
+                return BodyPart(self.Place, data_manager=self.data_manager).Label
+
+
     def part_attack(self, attack_id:str):
         if attack_id not in self.attacks():
             return None
@@ -304,6 +339,27 @@ class LocalBodyPart(BodyPart):
                                      'penetration': c_penetration})
 
             return total_damage
+
+    def __str__(self):
+        if self.IsImplant and self.get_root_partlabel():
+            main_text = f'**[ {self.get_root_partlabel()} ]:** *{self.Label}*\n'
+        else:
+            main_text = f'**[ {self.Label} ]:**\n'
+        if not self.injuries:
+            return main_text
+        else:
+            injury_text = f''
+            for i in self.diseases:
+                print(i)
+                injury_text += f'- {"*"+i.Name:>10}*\n'
+
+            for i in self.injuries:
+                print(i)
+                injury_text += f'- {"*"+i.Name:>10} ({i.Root})*\n'
+
+            return main_text + injury_text
+
+
 
 
 class LocalInjury(Injury):
@@ -484,6 +540,10 @@ class Body:
         self.body_parts = self.fetch_bodyparts()
         self.parent_part = self.data_manager.selectOne("RACES_BODY", columns="part_id", filter=f'race = "{self.race}" AND linked is NULL')[0]
 
+    def get_race(self):
+        race = self.data_manager.select_dict('CHARS_INIT',filter=f'id = {self.character_id}')[0]
+        return race.get('race', 'Human')
+
     def fetch_bodyparts(self):
         body_parts = []
         # Получаем список частей тела для данной расы из таблицы RACES_BODY
@@ -494,9 +554,9 @@ class Body:
             is_implant_present = self.data_manager.check("CHARS_BODY",
                                                          f"id = '{self.character_id}' AND place = '{part_id[0]}'")
             if is_implant_present:
-                implant_id = self.data_manager.selectOne("CHARS_BODY", columns="imp_id",
+                implant_id = self.data_manager.select_dict("CHARS_BODY",
                                                          filter=f"id = {self.character_id} AND place = '{part_id[0]}'")[0]
-                part = LocalBodyPart(self.character_id, implant_id, data_manager=self.data_manager)  # Заменяем часть тела имплантом
+                part = LocalBodyPart(self.character_id, implant_id.get('imp_id'), data_manager=self.data_manager, place=implant_id.get('place'), label=implant_id.get('label'))  # Заменяем часть тела имплантом
             else:
                 part = LocalBodyPart(self.character_id, part_id[0], data_manager=self.data_manager) # Используем оригинальную часть тела
 
@@ -571,7 +631,6 @@ class Body:
 
         total_pain = sum(part.calculate_pain() for part in self.body_parts)
 
-        print(total_pain, pain_limit, pain_factor)
         total_pain = (total_pain * pain_factor) / pain_limit
 
         return total_pain * 100
@@ -602,3 +661,185 @@ class Body:
             for i in c_parts_and_attacks:
                 if attack_id in i.get('attacks'):
                     return LocalBodyPart(self.character_id, i.get('part_id'), data_manager=self.data_manager)
+
+    def parts_health(self) -> dict:
+        total_list = {}
+        for part in self.body_parts:
+            total_list[part] = part.part_health()
+
+        return total_list
+
+    def phisical_stats_print(self):
+        c_stats = self.physical_stats()
+        c_bleeding = self.calculate_total_bleeding()
+        c_pain = self.calculate_total_pain()
+        total_text = ''
+        total_text += f'\n```Статус: {self.vital_signs()["status"]}```\n'
+        for stat in c_stats:
+            total_text += f'\n**{stat}** - *{c_stats[stat] if c_stats[stat] > 0 else 0:.2f}%*'
+
+        total_text += f'\n\n**Кровотечение:** *{c_bleeding:.2f}%* {self.__bleed__()}'
+        total_text += f'\n**Боль:** *{c_pain:.2f}%* ({self.__pain__()})'
+        total_text += f'\n**Жизнеспособность:** *{self.__vital__()}*'
+
+        return total_text
+
+    def __str__(self):
+
+        c_blood_lost = self.__bloodloss__()
+
+        text = ''
+        if c_blood_lost != 'Отсутствует':
+            text += f'\n**[ Все тело: ]** *{c_blood_lost}*\n'
+
+        for i in self.body_parts:
+            if i.injuries or i.IsImplant:
+                text += '\n' + i.__str__()
+
+        return text
+
+    def vital_damage(self):
+        c_parts: dict[LocalBodyPart] = self.parts_health()
+        c_vital = 100
+
+        for part in c_parts:
+            vital_effect = part.Fatality
+            c_health = 1 - c_parts[part]
+            c_vital -= vital_effect * c_health
+
+        return c_vital if c_vital > 0 else 0
+
+    def vital_signs(self):
+        from ArbRaces import Race
+
+        c_alive = True
+        c_active = True
+        c_status = 'В норме'
+
+        c_race = Race(self.race, data_manager=self.data_manager)
+
+        c_vital_damage = 100-self.vital_damage()
+
+        c_blood_lose = (self.data_manager.select_dict('CHARS_COMBAT',filter=f'id = {self.character_id}')[0].get('blood_lost')/c_race.Blood)*100
+
+        c_pain = self.calculate_total_pain()
+
+        max_pain = c_race.PainLimit
+
+        if c_pain >= max_pain:
+            c_active = False
+            c_status = 'В отключке'
+
+        if 100 > c_vital_damage >= 85:
+            c_active = False
+            c_status = 'В коме'
+        elif c_vital_damage >= 95:
+            c_alive = False
+
+        if 50 <= c_blood_lose < 80:
+            c_active = False
+            c_status = 'В отключке'
+        elif c_blood_lose >= 80:
+            c_alive = False
+
+        if not c_alive:
+            c_active = False
+            c_status = 'Мертв'
+
+
+        return {'status': c_status,
+                'alive': c_alive,
+                'active': c_active}
+
+    def __alive__(self):
+        c_status = self.vital_signs()['alive']
+        if c_status:
+            return True
+        else:
+            return False
+
+    def __pain__(self):
+        c_pain = self.calculate_total_pain()
+
+        if c_pain == 0:
+            output = 'Нет'
+        elif 1 <= c_pain < 15:
+            output = 'Незначительная'
+        elif 15 <= c_pain < 40:
+            output = 'Ощутимая'
+        elif 40 <= c_pain < 80:
+            output = 'Нестерпимая'
+        elif 80 <= c_pain < 100:
+            output = 'Невыносимая'
+        else:
+            output = 'Болевой шок'
+
+        return output
+
+    def __vital__(self):
+        c_vital = self.vital_damage()
+        print(c_vital)
+
+        if c_vital <= 10:
+            output = 'Отсутствует'
+        elif 10 < c_vital <= 35:
+            output = 'Опасно низкая'
+        elif 35 < c_vital <= 75:
+            output = 'Нестабильная'
+        elif c_vital < 75:
+            output = 'Стабильная'
+        else:
+            output = 'Стабильная'
+
+        return output
+
+    def __bleed__(self):
+        from ArbRaces import Race
+        c_bleed = self.calculate_total_bleeding()
+        c_blood = Race(self.race).Blood
+
+        c_loss = (c_bleed/c_blood)*100
+
+
+        if c_loss == 0:
+            c_time = 0
+        else:
+            c_time = round(24/(c_loss/100))
+
+        if c_bleed == 0:
+            output = 'Отсутствует'
+        elif c_loss < 50:
+            output = 'Неопасное'
+        elif 50 <= c_loss < 100:
+            output = 'Ощутимое'
+        elif 100 <= c_loss < 300:
+            output = f'Опасное ({c_time}ч. до смерти)'
+        elif 300 <= c_loss < 800:
+            output = f'Обильное ({c_time}ч. до смерти)'
+        elif 800 <= c_loss < 1200:
+            output = f'Экстремальное ({c_time}ч. до смерти)'
+        else:
+            output = f'Смертельное ({c_time}ч. до смерти)'
+
+        return output
+
+    def __bloodloss__(self):
+        from ArbRaces import Race
+        c_loss = (self.data_manager.select_dict('CHARS_COMBAT', filter=f'id = {self.character_id}')[0].get('blood_lost')/Race(self.race).Blood)*100
+
+        if c_loss == 0:
+            output = 'Отсутствует'
+        elif 0 < c_loss < 20:
+            output = 'Слабая кровопотеря'
+        elif 20 <= c_loss < 45:
+            output = 'Легкая кровопотеря'
+        elif 45 <= c_loss < 60:
+            output = 'Средняя кровопотеря'
+        elif 60 <= c_loss < 85:
+            output = 'Большая кровопотеря'
+        elif 85 <= c_loss < 100:
+            output = 'Огромная кровопотеря'
+        else:
+            output = 'Смертельная кровопотеря'
+
+        return output
