@@ -309,6 +309,9 @@ class CharacterSkill:
 
         data_manager.update('CHARS_SKILLS',query,f'id = {character_id} AND skill_id = "{self.name}"')
 
+    def get_skill_label(self, data_manager:DataManager):
+        return SkillInit(self.name, data_manager=data_manager).label
+
 @dataclass()
 class CharacterTrait:
     name: str
@@ -395,7 +398,7 @@ class CharacterAttributes:
                                                                  skill.get('lvl'),
                                                                  skill.get('exp'),
                                                                  skill.get('talant'),
-                                                                 skill.get('mastery'))
+                                                                 skill.get('master'))
 
         return total_skills
 

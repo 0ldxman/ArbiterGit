@@ -9,6 +9,7 @@ class WeaponInit:
         self.data_manager = kwargs.get('data_manager', DataManager())
         weapon_data = self.fetch_data()
         self.weapon_id = id
+        print(self.weapon_id)
         if weapon_data is None:
             self.Name = ''
             self.Class = ''
@@ -33,6 +34,7 @@ class WeaponInit:
 
 class RangeWeapon(WeaponInit):
     def __init__(self, id: str, **kwargs):
+        self.weapon_id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
         super().__init__(id, data_manager=self.data_manager)
         range_data = self.fetch_data_range()
@@ -46,9 +48,17 @@ class RangeWeapon(WeaponInit):
     def fetch_data_range(self) -> dict:
         return self.data_manager.select_dict('WEAPONS', '*', filter=f'id = "{self.weapon_id}"')[0]
 
+    def get_current_ammo(self):
+        c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO',filter=f'caliber = "{self.Caliber}"')]
+        return Ammunition(random.choice(c_bullets), data_manager=self.data_manager)
+
+    def range_damage(self):
+        return self.get_current_ammo().fire()
+
 
 class MeleeWeapon(WeaponInit):
     def __init__(self, id: str, **kwargs):
+        self.weapon_id = id
         self.data_manager = kwargs.get('data_manager',DataManager())
         super().__init__(id, data_manager=self.data_manager)
         damage_data = self._get_damage_info()
@@ -61,9 +71,6 @@ class MeleeWeapon(WeaponInit):
             self.damage_info = []
 
     def _get_damage_info(self) -> list[dict]:
-        if not hasattr(self, 'ID'):
-            self.data_manager.logger.error("ID not set for the MeleeWeapon")
-            raise ValueError("ID not set for the MeleeWeapon")
 
         damage_info = []
         weapon_damage_data = self.data_manager.select_dict('WEAPON_DAMAGE', '*', filter=f'weapon_id = "{self.weapon_id}"')
@@ -159,17 +166,15 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
             return WeaponAmmo(self.weapon_id, data_manager=self.data_manager).get_ammo_type()
         else:
             c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO',filter=f'caliber = "{self.Caliber}"')]
-            print(Ammunition(random.choice(c_bullets), data_manager=self.data_manager))
             return Ammunition(random.choice(c_bullets), data_manager=self.data_manager)
-
-
-    def range_damage(self):
-        return self.get_current_ammo().fire()
 
     def total_noise(self):
         basic_noise = self.Noise
 
         return basic_noise
+
+    def range_damage(self):
+        return self.get_current_ammo().fire()
 
 
 class WeaponAmmo:

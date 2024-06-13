@@ -10,6 +10,9 @@ class Injury:
         data = self.fetch_data()
 
         self.Name = data.get('name',None)
+        self.InnerName = data.get('inner_label', None)
+        self.ScarName = data.get('label_of_scar', None)
+        self.ScarInnerName = data.get('label_of_innerscar', None)
         self.PainFactor = data.get('pain_factor', 0)
         self.ScarPain = data.get('scar_pain_factor', 0)
         self.HealingSpeed = data.get('healing_speed', 0)
@@ -18,13 +21,10 @@ class Injury:
         self.Bleed = data.get('bleed',0)
 
     def fetch_data(self) -> dict:
-        columns = ['pain_factor', 'scar_pain_factor', 'healing_speed', 'infect_chance', 'scar_chance', 'name', 'bleed']
-        data = {}
-
-        for col in columns:
-            data[col] = self.data_manager.selectOne('INJURY_INIT', columns=col, filter=f'id = "{self.ID}"')[0]
-
-        return data
+        if self.data_manager.check('INJURY_INIT', filter=f'id = "{self.ID}"') is None:
+            return {}
+        else:
+            return self.data_manager.select_dict('INJURY_INIT', filter=f'id = "{self.ID}"')[0]
 
     def __repr__(self):
         return f'Injury.{self.ID}'
@@ -41,6 +41,9 @@ class DamageType:
         damage_info = self.data_manager.select_dict('DAMAGE_TYPE', columns='*', filter=filter)[0]
         if damage_info:
             self.label = damage_info['label']
+            self.destruction_label = damage_info['destruction_label']
+            self.min_overkill = damage_info['min_overkill']
+            self.max_overkill = damage_info['max_overkill']
             self.protection_type = damage_info['protection_type']
             self.protection_factor = damage_info['protection_factor']
             self.desc = damage_info['desc']
@@ -71,6 +74,7 @@ class DamageType:
 
     def __str__(self):
         return f'Тип урона: {self.label}'
+
 
 @dataclass()
 class Penetration:

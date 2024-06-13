@@ -49,6 +49,7 @@ class InBattleSound(Sound):
 
     def get_detection_chance(self, distance:int, current_round:int):
         volume_factor = self.volume/100
+
         round_factor = self.round_factor**(current_round - self.round)
         distance_modificator = max(0,self.distance*volume_factor-distance)/(self.distance*volume_factor)
 

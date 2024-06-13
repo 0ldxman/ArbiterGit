@@ -99,6 +99,14 @@ class CharacterMemoryEvent(MemoryEvent):
         else:
             return False, time
 
+    def fix_memory(self):
+        query = {'fixed': 1}
+        self.data_manager.update('CHARS_MEMORY', query, f'event_id = {self.memory_id}')
+
+    def blame(self, character_id:int):
+        query = {'subject_id': character_id}
+        self.data_manager.update('CHARS_MEMORY', query, f'event_id = {self.memory_id}')
+
     def __repr__(self):
         return f'MemoryEvent(id.{self.memory_id}, Type.{self.event_type}, Subject.{self.subject})'
 
@@ -106,6 +114,15 @@ class CharacterMemory:
     def __init__(self, character_id:int, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = character_id
+
+    def calculate_mood_effect(self):
+        c_events = self.fetch_active_events()
+        total_mood = 0
+        for event in c_events:
+            total_mood += event.mood
+
+        return total_mood
+
     def fetch_active_events(self):
         if self.data_manager.check('CHARS_MEMORY',f'id = {self.id}') is None:
             return []
@@ -265,14 +282,17 @@ class Relationship:
         return total_attributes
 
     def __repr__(self):
+        from ArbCharacters import InterCharacter
         if self.relation_of_actor is None:
-            return f'Unknown to actor'
+            pass
         else:
             trust, sympathy, respect, love, label = self.get_relation_of_actor()
             s_trust, s_sympathy, s_respect, s_love, s_label = self.get_relation_to_actor()
 
-            return f'{label} [ID {self.subject}]:\n> Доверие: {trust:+} ({s_trust:+})\n> Симпатия: {sympathy:+} ({s_sympathy:+})\n> Уважение: {respect:+} ({s_respect:+})\n> Влечение: {love:+} ({s_love:+})\n\n'
-
+            return f"""[ {label} ] **{InterCharacter(self.subject).name}** {sympathy:+} ({s_sympathy:+})"""
+            #> Доверие: {trust:+} ({s_trust:+})
+            #> Уважение: {respect:+} ({s_respect:+})
+            #> Влечение: {love:+} ({s_love:+})\n\n
 
 
 class CharacterRelations:

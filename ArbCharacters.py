@@ -8,46 +8,7 @@ from ArbWeapons import Weapon
 from ArbRoll import Roll
 from ArbSkills import CharacterAttributes, SkillInit
 
-class Race:
-    def __init__(self, id: str, data_manager: DataManager = None):
-        self.ID = id
-        if data_manager is None:
-            self.data_manager = DataManager()  # Создание экземпляра DataManager по умолчанию
-        else:
-            self.data_manager = data_manager
-        race_data = self.load_race_information()
-
-        self.Name = race_data.get('name')
-        self.Type = race_data.get('type')
-        self.Rare = race_data.get('rare')
-        self.Size = race_data.get('size')
-        self.IsPrimitive = race_data.get('primitive') == 1
-        self.IsRobot = race_data.get('is_robot') == 1
-        self.PainLimit = race_data.get('pain_limit')
-        self.PainFactor = race_data.get('pain_factor')
-        self.Blood = race_data.get('blood')
-        self.StressFactor = race_data.get('stress_factor')
-        self.Pregnancy = race_data.get('pregnancy')
-        self.Fertility = race_data.get('fertilit')
-        self.NatureDisguise = race_data.get('disguise')
-
-        self.body_parts = self.fetch_bodyparts()
-        self.parent_part = self.data_manager.selectOne("RACES_BODY", columns="part_id", filter=f'race = "{self.ID}" AND linked is NULL')[0]
-
-    def load_race_information(self):
-        race_data = self.data_manager.select_dict('RACES_INIT', '*', f'id = "{self.ID}"')[0]
-        return race_data
-
-    def fetch_bodyparts(self):
-        body_parts = []
-        # Получаем список частей тела для данной расы из таблицы RACES_BODY
-        body_parts_data = self.data_manager.select("RACES_BODY", columns="part_id", filter=f'race = "{self.ID}"')
-
-        for part_id in body_parts_data:
-            part = BodyPart(part_id[0], data_manager=self.data_manager) # Используем оригинальную часть тела
-            body_parts.append(part)
-
-        return body_parts
+from ArbRaces import Race
 
 
 class Character:
@@ -119,7 +80,6 @@ class Character:
             return trait in total_chars
 
     def recive_damage(self,*, part_id, damage_list: list[Damage] | Damage, apply_effect:bool=False) -> None:
-
         if isinstance(damage_list, Damage):
             damage_list.add_to_character(part_id=part_id, char_id=self.ID, effect=apply_effect)
         else:
@@ -530,6 +490,7 @@ class InterCharacter:
         self.owner = data.get('owner', None)
         self.callsign = data.get('callsign', '')
         self.age = data.get('age', 30)
+        self.name = data.get('name', 'Неизвестный')
         self.race = data.get('race', 'Human')
         self.sex = data.get('sex', 'Неизвестно')
 
@@ -551,12 +512,10 @@ class InterCharacter:
     def fetch_race_data(self):
         pass
 
-
     def fetch_health_data(self):
         injury_text = self.data_manager.select_dict(f'CHARS_INJURY', filter=f'id = {self.id}')
         diseses_text = self.data_manager.select_dict(f'CHARS_DISEASE', filter=f'id = {self.id}')
         return injury_text, diseses_text
-        
 
     def fetch_combat_data(self):
         pass
@@ -586,4 +545,58 @@ class InterCharacter:
         pass
 
     def fetch_skills(self):
-        pass
+        attrs = CharacterAttributes(self.id, data_manager=self.data_manager)
+        chars = attrs.characteristics_list()
+        skills = attrs.skill_list()
+
+        chars_text = ''
+        for char in chars:
+            if char != 'Связь':
+                chars_text += f'\n> **{chars[char].name}** - {chars[char].lvl}'
+
+        skill_text = ''
+        print(skills)
+        for skill in skills:
+            print(skill)
+            talant_emoji = ''
+            if 1.5 > skills[skill].talant >= 1.25:
+                talant_emoji = ' <:talant_25:1250156284792144096> '
+            elif 1.75 > skills[skill].talant >= 1.5:
+                talant_emoji = ' <:talant_50:1250156286633443379> '
+            elif 2 > skills[skill].talant >= 1.75:
+                talant_emoji = ' <:talant_75:1250156288697045164> '
+            elif skills[skill].talant >= 2:
+                talant_emoji = ' <:talant_100:1250156290630615140> '
+
+            mastery_emoji = ''
+            if 1.5 > skills[skill].mastery >= 1.25:
+                mastery_emoji = '<:mastery_25:1250160742716543196> '
+            elif 1.75 > skills[skill].mastery >= 1.5:
+                mastery_emoji = '<:mastery_50:1250160740648615998> '
+            elif 2 > skills[skill].mastery >= 1.75:
+                mastery_emoji = '<:mastery_75:1250160738933149757> '
+            elif skills[skill].mastery >= 2:
+                mastery_emoji = '<:mastery_100:1250160736651444314> '
+
+            skill_text += f'\n> {mastery_emoji}**{skills[skill].get_skill_label(self.data_manager)}**{talant_emoji} — {skills[skill].lvl}% ({skills[skill].exp:.2f})'
+
+        return chars_text, skill_text
+
+    def __str__(self):
+        year_marker = 'лет'
+        if self.age:
+            if self.age%10 in [2,3,4]:
+                year_marker = 'года'
+            elif self.age%10 in [1]:
+                year_marker = 'год'
+
+        text = f"""
+**Имя Фамилия:** {self.name} {f'"{self.callsign}"' if self.callsign else ''}
+**Раса:** {Race(self.race).Name}
+**Пол:** {self.sex}
+**Возраст:** {self.age} {year_marker}
+
+{f'**Организация:** {self.org}' if self.org else ''}
+{f'**Фракция:** {self.frac}' if self.frac else ''}
+        """
+        return text

@@ -937,6 +937,7 @@ class ActorCombat:
                 total_items[item.get('item_id')] = Item(item.get('item_id'), data_manager=self.data_manager)
 
             return total_items
+
     def get_current_grenades(self):
         from ArbAmmo import Ammunition
         from ArbWeapons import HandGrenade
@@ -1267,7 +1268,9 @@ class Actor:
             return True
 
     def steps_volume(self):
-        return random.randint(10, 100)
+        basic_roll = random.randint(10, 200)
+        stealth_mod = CharacterAttributes(self.id, data_manager=self.data_manager).check_skill('Скрытность') * 0.5
+        return basic_roll - stealth_mod if basic_roll - stealth_mod > 10 else 10
 
     def move_to_layer(self, layer_id:int):
         if layer_id not in self.get_current_battle().layers.keys():
@@ -1406,7 +1409,9 @@ class Actor:
             return round(total_disguise / len(c_clothes_id.keys()))
 
     def actor_disguise(self):
-        from ArbCharacters import Character, Race
+        from ArbCharacters import Character
+        from ArbRaces import Race
+
         clothes_disguise = self.calculate_clothes_disguise()
         race_disguise = Race(Character(self.id, data_manager=self.data_manager).Race, data_manager=self.data_manager).NatureDisguise
         weather_disguise = 1+(100-self.get_current_battle().weather.visibility)/100 if self.get_current_battle() is not None else 1
@@ -1414,7 +1419,9 @@ class Actor:
         terrain_disguise = 1+(100-self.get_current_layer().terrain.visibility)/100 if self.get_current_layer() is not None else 1
         object_disguise = self.get_current_object().coverage if self.get_current_object() is not None else 0
 
-        return round((race_disguise+clothes_disguise+object_disguise)*weather_disguise*terrain_disguise*daytime_disguise, 2)
+        stealth_mod = 1 + CharacterAttributes(self.id, data_manager=self.data_manager).check_skill('Скрытность') * 0.005
+
+        return round((race_disguise+clothes_disguise+object_disguise)*weather_disguise*terrain_disguise*daytime_disguise * stealth_mod, 2)
 
     def distance_of_view(self):
         c_eyes = Body(self.id, data_manager=self.data_manager).physical_stat('Зрение')/100

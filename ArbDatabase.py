@@ -72,6 +72,7 @@ class ConnectionPool:
 
 
 DEFAULT_LOGGER = Logger()
+DEFAULT_LOGGER.clear_log_file()
 DEFAULT_POOL = ConnectionPool(50)
 
 

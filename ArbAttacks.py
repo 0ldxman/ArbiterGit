@@ -106,7 +106,8 @@ class CombatManager:
     def calculate_total_damage(self, damages_dict: dict, target: int =None, **kwargs) -> list[dict]:
         c_damages = damages_dict
 
-        random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human'))
+        random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human')) if not 'part_id' in kwargs else (LocalBodyPart(target, kwargs.get('part_id'), data_manager=self.data_manager), None)
+        print(kwargs.get('part_id', None), random_part, parent_part)
 
         total_damage = []
 
@@ -137,11 +138,8 @@ class CombatManager:
             self.write_damage_in_database(target_id, part_id=damage.get('part_id'), damage_list=damage.get('damage'), apply_effect=apply_effect)
 
     def write_damage_in_database(self, target_id:int, *, part_id:str, damage_list: list[Damage] | Damage, apply_effect:bool=False) -> None:
-        if isinstance(damage_list, Damage):
-            damage_list.add_to_character(part_id=part_id, char_id=target_id, effect=apply_effect)
-        else:
-            for dam in damage_list:
-                dam.add_to_character(part_id=part_id, char_id=target_id, effect=apply_effect)
+        part = LocalBodyPart(target_id, part_id, data_manager=self.data_manager)
+        part.apply_damage(damage_list, apply_effect)
 
         self.data_manager.logger.info(f'Персонаж {target_id} получил урон {damage_list}')
 

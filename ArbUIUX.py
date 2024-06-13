@@ -99,6 +99,7 @@ class ErrorEmbed(ArbEmbed):
         error_color = (237, 66, 69)
         self.set_color(error_color)
 
+
 class HealthEmbed(ArbEmbed):
     def __init__(self, title: str=None, desc:str=None, damage:int=None, **kwargs):
         super().__init__(title, desc, **kwargs)
@@ -158,7 +159,7 @@ class HealthEmbed(ArbEmbed):
 #
 
 class Paginator(discord.ui.View):
-    def __init__(self, embeds, interaction, page_names=None):
+    def __init__(self, embeds, interaction, page_names=None, ignore_footer:bool=False):
         super().__init__(timeout=None)
         self.embeds = embeds
         self.interaction = interaction
@@ -166,8 +167,10 @@ class Paginator(discord.ui.View):
         self.page_names = page_names if page_names else {}
         self.default_button_names = ['<', '>']
 
-        for emb in self.embeds:
-            emb.set_footer(text=self.get_footer_text(self.embeds.index(emb) + 1))
+
+        if ignore_footer:
+            for emb in self.embeds:
+                emb.set_footer(text=self.get_footer_text(self.embeds.index(emb) + 1))
 
     def get_footer_text(self, page_number):
         if page_number in self.page_names:

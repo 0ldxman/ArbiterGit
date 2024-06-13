@@ -1,7 +1,9 @@
+import pprint
+
 from ArbDatabase import DataManager
 import random
 from dataclasses import dataclass
-from ArbDamage import Injury
+from ArbDamage import Injury, Damage
 
 
 @dataclass
@@ -202,7 +204,6 @@ class BodyPart:
     def get_affected_capacity(self, total_damage: int) -> Capacity | None:
         if self.Capacity:
             hp = max(self.Health - total_damage, 0)  # Учитываем уровень повреждений
-
             if self.Efficiency >= 0:
                 affected_value = (hp / self.Health) * self.Efficiency
             else:
@@ -225,7 +226,14 @@ class BodyPart:
 class LocalBodyPart(BodyPart):
     def __init__(self, char_id: int, part_id: str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__(part_id, data_manager=self.data_manager)
+        if isinstance(part_id, int):
+            part = self.data_manager.select_dict('CHARS_BODY',filter=f'imp_id = {part_id}')[0].get('type')
+        else:
+            part = part_id
+
+        super().__init__(part, data_manager=self.data_manager)
+        self.ID = part_id
+
         self.CharID = char_id
         self.CurrentHealth = self.Health
         self.Place = kwargs.get('place', None)
@@ -243,7 +251,7 @@ class LocalBodyPart(BodyPart):
         injuries = self.data_manager.select('CHARS_INJURY', columns='id_inj', filter=f'id = {self.CharID} AND place = "{self.ID}"')
         if injuries:
             for injury_id in injuries:
-                injury_data = self.data_manager.select_dict('CHARS_INJURY', columns='damage', filter=f'id_inj = {injury_id[0]}')[0]
+                injury_data = self.data_manager.select_dict('CHARS_INJURY', filter=f'id = {self.CharID} AND id_inj = {injury_id[0]}')[0]
                 self.CurrentHealth -= injury_data.get('damage', 0)
 
     def fetch_injuries(self):
@@ -319,11 +327,10 @@ class LocalBodyPart(BodyPart):
         if not self.IsImplant:
             return None
         else:
-            if self.data_manager.check('CHARS_BODY',f'id = {self.CharID} AND imp_id = {self.ID}') is None:
+            if not self.data_manager.check('CHARS_BODY',f'id = {self.CharID} AND imp_id = {self.ID} AND place = "{self.Place}"'):
                 return None
             else:
                 return BodyPart(self.Place, data_manager=self.data_manager).Label
-
 
     def part_attack(self, attack_id:str):
         if attack_id not in self.attacks():
@@ -340,22 +347,114 @@ class LocalBodyPart(BodyPart):
 
             return total_damage
 
+    def delete_injuries(self):
+        self.data_manager.delete('CHARS_INJURY',f'id = {self.CharID} AND place = "{self.ID}"')
+
+    def calculate_overkill(self, damage:int, overkill_roll:int):
+        if (self.CurrentHealth-damage > 0) or self.Health <= 0:
+            return False
+
+        damage_overkill = damage*(overkill_roll/100)
+
+        overkill_chance = (damage_overkill / self.Health)*100
+        c_roll = random.randint(0, 100)
+        print(overkill_chance, c_roll)
+        if c_roll <= overkill_chance:
+            return True
+        else:
+            return False
+
+    def apply_implant(self, type:str, label:str):
+        if not self.data_manager.check('CHARS_BODY', f'id = {self.CharID}'):
+            c_id = 0
+        else:
+            c_id = self.data_manager.maxValue('CHARS_BODY', 'imp_id', f'id = {self.CharID}') + 1
+
+        query = {'id': self.CharID,
+                 'imp_id': c_id,
+                 'place': self.ID,
+                 'linked': None,
+                 'type': type,
+                 'label': label}
+
+        self.data_manager.insert('CHARS_BODY',query)
+
+    def apply_damage(self, damage: Damage, effect:bool=False):
+        if damage.Damage <= 0:
+            return None
+
+        if self.calculate_overkill(damage.Damage, random.randint(damage.Type.min_overkill, damage.Type.max_overkill)):
+            damage_label = f'{damage.Type.destruction_label} ({damage.Root})'
+            self.delete_injuries()
+            self.apply_implant('Destroyed', damage_label)
+            return None
+
+        if not self.data_manager.check('CHARS_INJURY', f'id = {self.CharID}'):
+            c_id = 0
+        else:
+            c_id = self.data_manager.maxValue('CHARS_INJURY', 'id_inj', f'id = {self.CharID}') + 1
+
+        c_type = random.choice(damage.Type.get_possible_injuries())
+        bleed_chance = c_type.Bleed * damage.Damage * self.BleedFactor
+        c_roll = random.randint(0, 100)
+
+        if c_roll <= bleed_chance:
+            c_bleed = c_type.Bleed * damage.Damage
+        else:
+            c_bleed = 0
+
+        self.data_manager.insert('CHARS_INJURY', {'id': self.CharID,
+                                                  'id_inj': c_id,
+                                                  'place': self.ID,
+                                                  'type': c_type.ID,
+                                                  'root': damage.Root,
+                                                  'damage': damage.Damage,
+                                                  'bleed': c_bleed,
+                                                  'heal_efficiency': 0,
+                                                  'is_scar': 0})
+        if not effect:
+            pass
+        else:
+            damage.Type.apply_effect(self.CharID)
+
+    def recive_damage(self, *, damage_list: list[Damage] | Damage, apply_effect: bool = False) -> None:
+        if isinstance(damage_list, Damage):
+            self.apply_damage(damage_list, effect=apply_effect)
+        else:
+            for dam in damage_list:
+                self.apply_damage(dam, effect=apply_effect)
+
+        self.data_manager.logger.info(f'Персонаж {self.ID} получил урон {damage_list}')
+
     def __str__(self):
+        print(self.get_root_partlabel())
         if self.IsImplant and self.get_root_partlabel():
             main_text = f'**[ {self.get_root_partlabel()} ]:** *{self.Label}*\n'
         else:
             main_text = f'**[ {self.Label} ]:**\n'
-        if not self.injuries:
+        if not self.injuries and not self.diseases:
             return main_text
         else:
             injury_text = f''
             for i in self.diseases:
-                print(i)
-                injury_text += f'- {"*"+i.Name:>10}*\n'
+                injury_text += f'- *{i.Name}*'
+                if i.Immunity >= 100:
+                    injury_text += ' <:immune:1249787600622063718>\n'
+                else:
+                    injury_text += '\n'
 
             for i in self.injuries:
-                print(i)
-                injury_text += f'- {"*"+i.Name:>10} ({i.Root})*\n'
+                inj_name = i.Name if not self.IsInternal else i.InnerName
+                if i.IsScar:
+                    inj_name = i.ScarName if not self.IsInternal else i.ScarInnerName
+
+                injury_text += f'- *{inj_name} ({i.Root})*'
+                if i.HealingEfficiency:
+                    injury_text += ' <:healed:1249753146859847760>\n'
+                elif i.Bleed:
+                    injury_text += ' <:bleed:1249850720065425480>\n'
+                else:
+                    injury_text += '\n'
 
             return main_text + injury_text
 
@@ -380,12 +479,15 @@ class LocalInjury(Injury):
         self.IsScar = injury_data.get('is_scar', False) == 1
 
     def my_fetch_data(self) -> dict:
-        data = {}
-        columns = ['type', 'place', 'root', 'damage', 'bleed', 'heal_efficiency', 'is_scar']
-        for col in columns:
-            data[col] = self.data_manager.selectOne('CHARS_INJURY', columns=col, filter=f'id_inj = {self.InjuryID} AND id = {self.CharID}')[0]
+        if self.data_manager.check('CHARS_INJURY',filter=f'id_inj = {self.InjuryID} AND id = {self.CharID}') is None:
+            return {}
+        else:
+            return self.data_manager.select_dict('CHARS_INJURY', filter=f'id_inj = {self.InjuryID} AND id = {self.CharID}')[0]
 
-        return data
+    def heal(self, heal_efficiency:int):
+        self.HealingEfficiency += heal_efficiency
+        query = {'heal_efficiency': self.HealingEfficiency}
+        self.data_manager.update('CHARS_INJURY', query, f'id_inj = {self.InjuryID}')
 
     def delete(self):
         self.data_manager.delete('CHARS_INJURY', filter=f'id = {self.CharID} AND id_inj = {self.InjuryID}')
@@ -471,6 +573,7 @@ class RaceAttack:
         self.main_data = self.fetch_main_data()
         self.cost = self.main_data.get('ap', 0)
         self.range = self.main_data.get('range', 0)
+        self.name = self.main_data.get('name', 'Неизвестная расовая атака')
 
     def fetch_main_data(self):
         if self.data_manager.check('RACES_MELEE', f'id = "{self.id}"'):
@@ -693,7 +796,7 @@ class Body:
             text += f'\n**[ Все тело: ]** *{c_blood_lost}*\n'
 
         for i in self.body_parts:
-            if i.injuries or i.IsImplant:
+            if i.injuries or i.IsImplant or i.diseases:
                 text += '\n' + i.__str__()
 
         return text
@@ -703,7 +806,10 @@ class Body:
         c_vital = 100
 
         for part in c_parts:
-            vital_effect = part.Fatality
+            if part.IsImplant:
+                vital_effect = BodyPart(part.Place, data_manager=self.data_manager).Fatality
+            else:
+                vital_effect = part.Fatality
             c_health = 1 - c_parts[part]
             c_vital -= vital_effect * c_health
 
