@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 import datetime
+import math
+import pprint
 import random
 from dataclasses import dataclass
 from ArbDatabase import DataManager
-from ArbCharacters import CharacterCombat, CharacterAttributes
+from ArbCharacters import CharacterAttributes
 from ArbHealth import Body
 from ArbSounds import InBattleSound
 from ArbAttacks import RangeAttack
@@ -153,8 +155,6 @@ class GameObject(ObjectType):
 
         self.data_manager.delete('BATTLE_OBJECTS',f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
 
-
-
     def __repr__(self):
         return f'Object.{self.object_id} ({self.current_endurance}/{self.max_endurance}DP)'
 
@@ -179,6 +179,7 @@ class LayerModificationType:
         else:
             return self.data_manager.select_dict('MODIFIER_INIT', filter=f'id = "{self.id}"')[0]
 
+
 @dataclass()
 class LayerModification:
     modifier_type: LayerModificationType
@@ -186,6 +187,7 @@ class LayerModification:
 
     def get_effect_label(self):
         return self.modifier_type.label
+
     def get_visibility(self):
         return self.modifier_type.visibility
 
@@ -346,7 +348,7 @@ class Layer:
             total_objects = []
             for object in self.objects:
                 c_object = self.objects[object]
-                total_objects.append(f' {c_object.label}[id:{c_object.id}]')
+                total_objects.append(f' ***{c_object.label.lower()}***``[id:{c_object.id}]``')
 
             object_text += ','.join(total_objects)
         else:
@@ -357,7 +359,7 @@ class Layer:
     def describe(self):
         object_text = self.describe_objects()
 
-        return f'{self.terrain.label}. \n{self.terrain.desc}. Вы видите{object_text}'
+        return f'\n> {self.terrain.desc}. Вы видите{object_text}'
 
     def __repr__(self):
         return f'Battle.{self.battle_id}.Layer.{self.id}'
@@ -471,6 +473,9 @@ class BattleTeam(TeamRole):
 
             Actor(actor_id).set_initiative()
 
+    def count_participants(self):
+        return self.data_manager.get_count('BATTLE_CHARACTERS','character_id',f'battle_id = {self.battle_id} AND team_id = {self.id}')
+
 
 class Battlefield:
     def __init__(self, id:int, **kwargs):
@@ -508,6 +513,13 @@ class Battlefield:
     def log_event(self, **kwargs):
         return EventLogger(data_manager=self.data_manager, battle_id=self.id, round=self.round, **kwargs)
 
+    def fetch_teams(self):
+        if self.data_manager.check('BATTLE_TEAMS',f'battle_id = {self.id}'):
+            teams = self.data_manager.select_dict('BATTLE_TEAMS', filter=f'battle_id = {self.id}')
+            return [BattleTeam(team['team_id'], self.id, data_manager=self.data_manager) for team in teams]
+        else:
+            return []
+
     def fetch_actors(self):
         if self.data_manager.check('BATTLE_CHARACTERS', f'battle_id = {self.id}') is None:
             return []
@@ -535,6 +547,12 @@ class Battlefield:
                       'is_active': None}
             self.data_manager.insert('BATTLE_CHARACTERS', prompt)
 
+    def calculate_size(self):
+        min_layer = min(self.layers.keys())
+        max_layer = max(self.layers.keys())
+
+        return (max_layer-min_layer)*self.distance_delta
+
     def max_initiative_actor(self):
         c_list = self.fetch_actors()
         c_actor = None
@@ -545,6 +563,23 @@ class Battlefield:
                 c_actor = act
 
         return c_actor
+
+    def turn_order(self):
+        c_list = self.fetch_actors()
+        sorted_actors = sorted(c_list, key=lambda actor: actor.initiative, reverse=True)
+        return [actor.id for actor in sorted_actors]
+
+    def current_turn_index(self):
+        for index, actor in enumerate(self.turn_order()):
+            if Actor(actor, data_manager=self.data_manager).is_active:
+                return index
+        return None
+
+    def actor_turn_index(self, actor_id:int):
+        for index, actor in enumerate(self.turn_order()):
+            if actor == actor_id:
+                return index
+        return None
 
     def next_round(self):
         self.round += 1
@@ -587,13 +622,36 @@ class Battlefield:
 
         return BattleTeam(c_id, self.id, data_manager=self.data_manager)
 
+    def describe_teams(self):
+        total_text = f''
+        if not self.fetch_teams():
+            return f'*(В данной битве нет организованных сторон)*'
+
+        teams = self.fetch_teams()
+        for team in teams:
+            total_text += f'\n- ``[id {team.id}]`` **{team.label}** — *{team.count_participants()} чел.*'
+        return total_text
+
+    def describe(self):
+        name = f'{self.label}' if self.label else f'Сражение {self.id}'
+        total_text = f'''
+*Внешние условия:* ***{self.time.label}. {self.weather.label}***
+*Масштаб:* ***{self.calculate_size()}м. ``(ср. {self.distance_delta}м.)``***
+
+> *— "{self.description}"*
+
+- **Текущий раунд:** {self.round} ``(сброс инициативы каждые {self.key_round_delay})``
+- **Текущий ход:** {self.current_turn_index()+1} из {len(self.turn_order())}
+'''
+        return name, total_text
+
 
 class ActorCombat:
     def __init__(self, id:int, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
         data = self.fetch_data()
-        self.ap = data.get('ap',0)
+        self.ap = data.get('ap', 0)
         self.ap_bonus = data.get('ap_bonus', 0)
         self.luck = data.get('luck', 0)
         self.blood_lost = data.get('blood_lost', 0)
@@ -626,7 +684,7 @@ class ActorCombat:
 
     def hunter_id(self):
         if self.data_manager.check('CHARS_COMBAT',f'hunted = {self.id}') is None:
-            return None
+            return []
         else:
             total_hunters = []
             for e in self.data_manager.select_dict('CHARS_COMBAT',filter=f'hunted = {self.id}'):
@@ -671,18 +729,37 @@ class ActorCombat:
                 return False
 
     def set_melee_target(self, enemy_id:int):
-        self.data_manager.update('CHARS_COMBAT', {'melee_target': enemy_id}, filter=f'id = {self.id}')
-        self.melee_target = enemy_id
+        print(self.ap, self.id)
+        if self.ap >= 1:
+            self.ap_use(1)
+            self.clear_statuses()
+            self.data_manager.update('CHARS_COMBAT', {'melee_target': enemy_id}, filter=f'id = {self.id}')
+            self.data_manager.update('CHARS_COMBAT', {'melee_target': self.id}, filter=f'id = {enemy_id}')
+            self.melee_target = enemy_id
+            return True
+        else:
+            return False
 
     def flee_from_melee(self):
+        self.clear_statuses()
         if self.melee_target_from:
             for i in self.melee_target_from:
                 self.data_manager.update('CHARS_COMBAT',{'melee_target': None},f'id = {i}')
         else:
             pass
 
-    def get_current_weapons(self):
-        return CharacterCombat(self.id, data_manager=self.data_manager).current_weapons_id()
+    def get_current_weapons(self, item_id:int=None):
+        c_weapons_data = self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'id = {self.id} AND slot = "Оружие"')
+        weapons = []
+        for i in c_weapons_data:
+            weapons.append(i.get('item_id'))
+
+        if item_id is None:
+            return weapons
+        elif item_id in weapons:
+            return [item_id]
+        else:
+            return []
 
     def check_if_current_weapon_melee(self, weapon_id:int=None):
         from ArbWeapons import Weapon
@@ -818,9 +895,10 @@ class ActorCombat:
             return False
 
     def set_target(self, enemy_id:int):
-        if self.data_manager.check('CHARS_COMBAT',f'id = {enemy_id}') is None:
+        if not self.data_manager.check('CHARS_COMBAT',f'id = {enemy_id}') or self.melee_target or self.melee_target_from:
             return False
         else:
+            self.flee_from_melee()
             self.data_manager.update('CHARS_COMBAT',{'target': enemy_id}, f'id = {self.id}')
             return True
 
@@ -911,7 +989,6 @@ class ActorCombat:
             return None
 
     def get_current_ammo(self, **kwargs):
-        from ArbItems import Item
 
         if self.check_character_owner() is None:
             return -1, None
@@ -920,23 +997,21 @@ class ActorCombat:
         if c_weapon is None:
             return 0, None
 
-        if self.data_manager.check('CHARS_MAGAZINE',f'weapon_id = {c_weapon}') is None:
+        if self.data_manager.check('CHARS_EQUIPMENT',f'item_id = {c_weapon}') is None:
             return 0, None
 
-        c_bullets_id = self.data_manager.select_dict('CHARS_MAGAZINE', filter=f'weapon_id = {c_weapon}')[0].get('magazine_id', None)
+        c_bullets_id = self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'item_id = {c_weapon}')[0]
         if c_bullets_id:
-            return Item(c_bullets_id, data_manager=self.data_manager).Value, c_bullets_id
+            return c_bullets_id.get('bullets'), c_bullets_id.get('ammo_id')
 
     def get_actor_inventory(self):
-        from ArbItems import Item
-        if self.data_manager.check('CHARS_INVENTORY',f'character_id = {self.id}') is None:
-            return {}
-        else:
-            total_items = {}
-            for item in self.data_manager.select_dict('CHARS_INVENTORY', f'character_id = {self.id}'):
-                total_items[item.get('item_id')] = Item(item.get('item_id'), data_manager=self.data_manager)
+        from ArbItems import Inventory
 
-            return total_items
+        c_inventory = Inventory.get_inventory_by_character(self.id, data_manager=self.data_manager)
+        if c_inventory:
+            return c_inventory.get_dict()
+        else:
+            return {}
 
     def get_current_grenades(self):
         from ArbAmmo import Ammunition
@@ -948,14 +1023,22 @@ class ActorCombat:
             items = self.get_actor_inventory()
             total_grenades = {}
             for item in items:
-                if items[item].Class == 'Боеприпасы':
+                if items[item].Class == 'Граната':
                     if Ammunition(items[item].Type, data_manager=self.data_manager).caliber == 'Граната':
                         total_grenades[item] = HandGrenade(item, data_manager=self.data_manager)
 
             return total_grenades
 
-    def use_ammo(self, value:int=None, **kwargs):
+    def use_grenade(self, grenade_id:int, value:int=None):
         from ArbItems import Item
+
+        if not value:
+            value = 1
+
+        grenade = Item(grenade_id, data_manager=self.data_manager)
+        grenade.change_value(-value)
+
+    def use_ammo(self, value:int=None, **kwargs):
 
         c_weapon = kwargs.get('weapon_id', None)
         if c_weapon is None:
@@ -966,7 +1049,37 @@ class ActorCombat:
         else:
             c_ammo = self.get_current_ammo(weapon_id=c_weapon)
             if c_ammo[0] != -1:
-                Item(c_ammo[1], data_manager=self.data_manager).change_value(-1*value if value else -1)
+                self.data_manager.update('CHARS_EQUIPMENT', {'bullets': c_ammo[0] - value}, filter=f'item_id = {c_weapon}')
+
+    def reload(self, weapon_id:int=None, item_id:int=None):
+        from ArbWeapons import Weapon
+        if weapon_id is None:
+            weapon_id = self.get_current_weapons()
+        if not weapon_id:
+            return None, None
+        else:
+            weapon_id = random.choice(weapon_id)
+
+        c_weapon = Weapon(weapon_id, data_manager=self.data_manager)
+        if c_weapon.ReloadAPCost > self.ap:
+            return False, c_weapon
+        elif not c_weapon.can_be_reloaded():
+            return None, c_weapon
+        else:
+            self.ap_use(c_weapon.ReloadAPCost)
+            return c_weapon.reload(item_id), c_weapon
+
+    def weapon_attack_cost(self, weapon_id: int = None):
+        from ArbWeapons import Weapon
+        c_weapon_id = random.choice(self.get_current_weapons(weapon_id))
+        if c_weapon_id is None:
+            return math.inf
+        else:
+            return Weapon(c_weapon_id, data_manager=self.data_manager).ActionPoints
+
+    def race_attack_cost(self, attack_id:str = None):
+        from ArbHealth import RaceAttack
+        return RaceAttack(attack_id, data_manager=self.data_manager).cost
 
     def range_attack(self, enemy_id:int, **kwargs):
         from ArbCharacters import Character, Race
@@ -974,19 +1087,20 @@ class ActorCombat:
 
         c_weapon = kwargs.get('weapon_id', None)
         if c_weapon is None:
-            c_weapon = random.choice(CharacterCombat(self.id, data_manager=self.data_manager).current_weapons_id())
+            c_weapon = random.choice(self.get_current_weapons())
 
         if self.check_if_current_weapon_melee(c_weapon):
-            return None
+            return None, 'Вы понимаете что у вас нет оружия для дальней атаки'
 
         c_ammo = self.get_current_ammo(weapon_id=c_weapon)
         if c_ammo[0] == 0:
-            return None
+            self.make_sound('Click', random.randint(10, 150))
+            return None, 'Вы слышите глухой щелчок и понимаете, что у вас закончились патроны'
 
-        c_cost = CharacterCombat(self.id, data_manager=self.data_manager).weapon_attack_cost(c_weapon)
+        c_cost = self.weapon_attack_cost(c_weapon)
 
         if c_cost > self.ap and not kwargs.get('provoked', None):
-            return None
+            return None, 'У вас нет сил и возможности атаковать противника'
         elif kwargs.get('provoked', None):
             pass
         else:
@@ -1002,7 +1116,7 @@ class ActorCombat:
 
         if self.hunted_from:
             self.attack_if_hunted()
-            return None
+            return None, 'Вы пытаетесь навестись на цель, но вас атакуют противники выцеливавшие вас всё это время'
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
         distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
@@ -1026,45 +1140,46 @@ class ActorCombat:
 
         if total_attacks != 0:
             if c_ammo[0] != -1:
-                self.use_ammo(total_attacks)
+                self.use_ammo(total_attacks, weapon_id=c_weapon)
 
             for i in range(total_attacks):
                 self.make_sound('GunShot', weapon_loudness)
         else:
             self.make_sound('Click', random.randint(10,150))
 
-        return total_damage
+        return total_damage, f'Вы целитесь, после чего {Weapon(c_weapon).Name} совершает несколько выстрелов!'
 
     def melee_attack(self, enemy_id:int, **kwargs):
         from ArbCharacters import Character, Race
+        from ArbWeapons import Weapon
         from ArbAttacks import MeleeAttack
 
         c_weapon = kwargs.get('weapon_id', None)
         if c_weapon is None:
-            c_weapon = random.choice(CharacterCombat(self.id, data_manager=self.data_manager).current_weapons_id())
+            c_weapon = random.choice(self.get_current_weapons())
 
-        c_cost = CharacterCombat(self.id, data_manager=self.data_manager).weapon_attack_cost(kwargs.get(c_weapon))
+        c_cost = self.weapon_attack_cost(c_weapon)
 
         if c_cost > self.ap and not kwargs.get('provoked', None):
-            return None
+            return None, 'У вас нет сил и возможности атаковать противника'
         elif kwargs.get('provoked', None):
             pass
         else:
             self.ap_use(c_cost)
 
-        if self.melee_target_from:
-            c_enemies = self.attack_if_in_melee()
-            if c_enemies:
-                enemy_id = c_enemies
+        #if self.melee_target_from:
+        #    c_enemies = self.attack_if_in_melee()
+        #    if c_enemies:
+        #        enemy_id = c_enemies
 
         if self.hunted_from:
             self.attack_if_hunted()
-            return None
+            return None, 'Вы пытаетесь сблизиться с противником, но вас атакуют враги выцеливавшие вас всё это время'
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
         distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
         if distance_to_enemy > 0:
-            return None
+            return None, 'Вы понимаете, что противник находится слишком далеко для его атаки в ближнем бою'
 
         e_cover = enemy.get_current_object()
         if e_cover:
@@ -1085,7 +1200,7 @@ class ActorCombat:
             for i in range(total_attacks):
                 self.make_sound('Fight', weapon_loudness)
 
-        return total_damage
+        return total_damage, f'Вы встаёте в боевую стойку, после чего замахиваете {Weapon(c_weapon).Name} и наносите несколько ударов!'
 
     def race_attack(self, enemy_id:int, **kwargs):
         from ArbCharacters import Character, Race
@@ -1097,10 +1212,10 @@ class ActorCombat:
         if not c_attack:
             c_attack = random.choice(Body(self.id, data_manager=self.data_manager).available_attacks())
 
-        c_cost = CharacterCombat(self.id, data_manager=self.data_manager).race_attack_cost(c_attack)
+        c_cost = self.race_attack_cost(c_attack)
 
         if c_cost > self.ap and not kwargs.get('provoked', None):
-            return None
+            return None, 'У вас нет сил и возможности атаковать противника'
         elif kwargs.get('provoked', None):
             pass
         else:
@@ -1113,12 +1228,12 @@ class ActorCombat:
 
         if self.hunted_from:
             self.attack_if_hunted()
-            return None
+            return None, 'Вы пытаетесь совершить атаку, но вас атакуют противники выцеливавшие вас всё это время'
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
         distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
         if RaceAttack(c_attack, data_manager=self.data_manager).range < distance_to_enemy:
-            return None
+            return None, 'Вы понимаете, что расстояния между вами и противником слишком велико для совершения данной атаки'
 
         e_cover = enemy.get_current_object()
         if e_cover:
@@ -1136,7 +1251,7 @@ class ActorCombat:
 
         self.make_sound('Fight', random.randint(10, 150))
 
-        return total_damage
+        return total_damage, f'Вы готовитесь и совершаете {RaceAttack(c_attack).name.lower()} атакуя своего противника'
 
     def make_sound(self, sound_id:str, volume:int=None):
         volume = volume if volume is not None else random.randint(10,150)
@@ -1148,10 +1263,20 @@ class ActorCombat:
         from ArbAttacks import Explosion
 
         if kwargs.get('grenade_id', None) is not None:
-            current_grenade = self.get_current_grenades()[kwargs.get('grenade_id')]
+            if not self.get_current_grenades():
+                return None, 'У вас нет кончились гранаты!'
+            else:
+                if kwargs.get('grenade_id', None) in self.get_current_grenades():
+                    current_grenade = self.get_current_grenades()[kwargs.get('grenade_id')]
+                else:
+                    return None, 'У вас нет такой гранаты'
+
         else:
             if self.check_character_owner() is not None:
-                return None
+                if self.get_current_grenades():
+                    current_grenade = random.choice(list(self.get_current_grenades().values()))
+                else:
+                    return None, 'У вас нет гранат, которые вы можете использовать'
             else:
                 grenades_types = [i.get('id') for i in self.data_manager.select_dict('AMMO', filter=f'caliber = "Граната"')]
                 current_grenade = Grenade(random.choice(grenades_types), data_manager=self.data_manager)
@@ -1161,7 +1286,7 @@ class ActorCombat:
         c_cost = 3
 
         if c_cost > self.ap and not kwargs.get('provoked', None):
-            return None
+            return None, 'У вас нет сил и возможности атаковать противника'
         elif kwargs.get('provoked', None):
             pass
         else:
@@ -1169,11 +1294,14 @@ class ActorCombat:
 
         if self.melee_target_from:
             self.attack_if_in_melee()
-            return None
+            return None, 'Вы пытаетесь достать гранату, но это замечают противники находящиеся рядом с вами и атакуют!'
 
         if self.hunted_from:
             self.attack_if_hunted()
-            return None
+            return None, 'Вы пытаетесь достать гранату, но вас атакуют противники выцеливавшие вас всё это время'
+
+        if self.check_character_owner() is not None:
+            self.use_grenade(current_grenade.ID)
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
         distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
@@ -1198,19 +1326,18 @@ class ActorCombat:
                 maybe_damaged += Layer(layer, Actor(self.id, data_manager=self.data_manager).current_battle_id, data_manager=self.data_manager).characters_not_in_cover()
 
         total_damage, current_loud, damage_for_cover = Explosion(main_target, maybe_damaged, data_manager=self.data_manager).initiate(current_grenade)
-        self.make_sound('Explotion', current_loud)
+        self.make_sound('Explosion', current_loud)
 
         if e_cover:
             e_cover.recive_damage(damage_for_cover)
 
-        return total_damage
+        return total_damage, f'Вы одергиваете чеку и бросаете гранату ({current_grenade.name}) в своего противника'
 
 
 class Actor:
     def __init__(self, id:int, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
-        self.combat_data = self.fetch_combat_data()
         battle_data = self.fetch_battle_data()
         self.current_battle_id = battle_data.get('battle_id', None)
         self.current_layer_id = battle_data.get('layer_id', None)
@@ -1279,21 +1406,25 @@ class Actor:
         if self.current_layer_id == layer_id:
             return False
 
+        if self.actor_attributes.melee_target_from:
+            self.actor_attributes.attack_if_in_melee()
+            if random.randint(0, 100) > random.randint(0, 100):
+                return False
+
         steps_volume = self.steps_volume()
 
         self.remove_cover()
+        if self.actor_attributes.get_melee_target_from():
+            self.actor_attributes.flee_from_melee()
 
         if self.current_layer_id < layer_id:
             for _ in range(layer_id-self.current_layer_id):
-                self.move_forward()
-            self.make_sound('Steps', steps_volume)
+                if self.move_forward():
+                    self.make_sound('Steps', steps_volume)
         elif self.current_layer_id > layer_id:
             for _ in range(self.current_layer_id-layer_id):
-                self.move_back()
-            self.make_sound('Steps', steps_volume)
-
-        if self.actor_attributes.get_melee_target_from():
-            self.actor_attributes.flee_from_melee()
+                if self.move_back():
+                    self.make_sound('Steps', steps_volume)
 
         return self.current_layer_id
 
@@ -1310,24 +1441,34 @@ class Actor:
 
     def detect_sound_source(self, sound_id:int):
         from ArbRoll import RollCapacity
+        if self.actor_attributes.ap < 1:
+            return False
+        else:
+            self.actor_attributes.ap_use(1)
+
         c_battle = self.get_current_battle()
 
         c_sound = InBattleSound(sound_id, data_manager=self.data_manager)
         c_distance = self.distance_to_layer(c_sound.layer_id)
         c_chance = c_sound.get_detection_chance(c_distance, c_battle.round)
         c_hearing = CharacterAttributes(self.id, data_manager=self.data_manager).check_capacity('Слух')
+        c_hearing = RollCapacity(c_hearing).dice//2
 
-        if RollCapacity(c_hearing).dice >= 100-c_chance+c_battle.time.noise+c_battle.weather.noise:
+        roll = CharacterAttributes(self.id, data_manager=self.data_manager).roll_skill('Analysis', difficulty=100-c_chance+c_battle.time.noise+c_battle.weather.noise, buff=c_hearing)
+        print(roll, 100-c_chance+c_battle.time.noise+c_battle.weather.noise, c_hearing)
+
+        if roll[0]:
             self.take_target(c_sound.actor_id)
             return c_sound.actor_id
         else:
             return False
 
+    def list_of_sounds(self):
+        c_list = self.data_manager.select_dict('BATTLE_SOUNDS', filter=f'battle_id = {self.current_battle_id} AND actor_id != {self.id}')
+        return [InBattleSound(sound.get('id'), data_manager=self.data_manager) for sound in c_list]
+
     def fetch_attributes(self):
         return ActorCombat(self.id, data_manager=self.data_manager)
-
-    def fetch_combat_data(self):
-        return CharacterCombat(self.id, data_manager=self.data_manager)
 
     def fetch_battle_data(self):
         if self.data_manager.check('BATTLE_CHARACTERS',f'character_id = {self.id}') is None:
@@ -1354,7 +1495,11 @@ class Actor:
             return None
 
     def take_target(self, enemy_id:int):
-        ActorCombat(self.id, data_manager=self.data_manager).set_target(enemy_id)
+        all_contacts = self.get_all_visible_characters_id()
+        if enemy_id in all_contacts:
+            return ActorCombat(self.id, data_manager=self.data_manager).set_target(enemy_id)
+        else:
+            return False
 
     def take_supression(self, layer_id:int=None):
         return ActorCombat(self.id, data_manager=self.data_manager).supress_enemy(layer_id)
@@ -1387,15 +1532,16 @@ class Actor:
         return round((1+(c_difficulty - skill)/100) * move_factor * c_base_cost * c_delta)
 
     def calculate_slot_disguise(self, slot_name:str):
-        from ArbClothes import Clothes
-        c_clothes_id = self.combat_data.armors_id()[slot_name]
+        from ArbClothes import Clothes, CharacterArmors
+        c_clothes_id = CharacterArmors(self.id, data_manager=self.data_manager).armors_id()[slot_name]
         total_calculation = 0
         for i in c_clothes_id.keys():
             total_calculation += Clothes(c_clothes_id[i]).cloth_disguise()
         return total_calculation
 
     def calculate_clothes_disguise(self):
-        c_clothes_id = self.combat_data.armors_id()
+        from ArbClothes import CharacterArmors
+        c_clothes_id = CharacterArmors(self.id, data_manager=self.data_manager).armors_id()
         c_slots_disguise = {}
         total_disguise = 0
         for c_slot in c_clothes_id.keys():
@@ -1458,6 +1604,8 @@ class Actor:
                 layers_vigilance[i] = cached_results[i]
             else:
                 vigilance = self.basic_layer_vigilance(c_layer_id, i, c_delta)
+                if vigilance <= 0:
+                    break
                 layers_vigilance[i] = vigilance
                 cached_results[i] = vigilance
 
@@ -1472,6 +1620,8 @@ class Actor:
                 layers_vigilance[i] = cached_results[i]
             else:
                 vigilance = self.basic_layer_vigilance(c_layer_id, i, c_delta)
+                if vigilance <= 0:
+                    break
                 layers_vigilance[i] = vigilance
                 cached_results[i] = vigilance
 
@@ -1542,6 +1692,11 @@ class Actor:
         if c_cost > self.actor_attributes.ap:
             return False
         else:
+            if self.actor_attributes.melee_target_from:
+                self.actor_attributes.attack_if_in_melee()
+                if random.randint(0, 100) > random.randint(0, 100):
+                    return False
+
             self.remove_cover()
             self.actor_attributes.ap_use(c_cost)
             self.set_cover(object_id)
@@ -1618,5 +1773,108 @@ class Actor:
         self.data_manager.update('BATTLE_CHARACTERS', {'layer_id': layer_id}, f'character_id = {self.id}')
         self.current_layer_id = layer_id
 
+    def lookout(self):
+        from ArbCharacters import InterCharacter, Race
+        total_text = ''
+        visible_layers = self.battle_layers_vigilance()
+        for i in sorted(visible_layers.keys()):
+            c_layer = Layer(i, self.current_battle_id, data_manager=self.data_manager)
+            total_text += f'\n\n**Слой {i} ({c_layer.label if c_layer.label else c_layer.terrain.label})**{"" if i != self.current_layer_id else " ``<--- Вы находитесь здесь!``"} {c_layer.describe()}'
+            characters = self.get_visible_characters_on_layer(i)
+            print(characters)
+            if characters:
+                total_text += '. Здесь вы видите силуэты'
+                for character in characters:
+                    total_text += f', ``id:{character}`` ({Race(InterCharacter(character, data_manager=self.data_manager).race).Name})'
+
+        return total_text
+
+    def turn_number(self):
+        current_actor = Battlefield(self.current_battle_id, data_manager=self.data_manager).actor_turn_index(self.id)+1
+        return current_actor
+
+    def current_turn(self):
+        current_actor = Battlefield(self.current_battle_id, data_manager=self.data_manager).current_turn_index()+1
+        return current_actor
+
+    def combat_info(self):
+        data = ActorCombat(self.id, data_manager=self.data_manager)
+        layer = Layer(self.current_layer_id, self.current_battle_id, data_manager=self.data_manager)
+        cover = self.get_current_object() if self.current_object_id else None
+        team = BattleTeam(self.team_id, self.current_battle_id, data_manager=self.data_manager) if self.team_id is not None else None
+
+        melee = f'\n> *Вас атакуют в ближнем бою:* ``{data.melee_target_from}``' if data.melee_target_from else ''
+        hunt = f'\n> *Вы выцеливаете:* ``id:{data.hunted}``' if data.hunted else ''
+        contain = f'\n> *Вы подавляете слой:* ``{data.contained}``' if data.contained else ''
+        overwatch = f'\n> *Вы находитесь в дозоре и готовы отразить атаку...*' if data.ready else ''
+
+
+        total_text = f'''
+<:action_points:1251239084144197696> **Очки Действия:** ``{data.ap} ОД. {f'({data.ap_bonus:+} ОД.)' if data.ap_bonus else ''}``
+> *Команда:*   ``{team.label if team else 'Отсутствует'}``
+> *Текущий слой:*  ``{layer.label if layer.label else layer.terrain.label} ({layer.id}) {'``!!! Подавляется огнём !!!``' if data.contained_from else ''}``
+> *Укрытие:*   ``{f'{cover.label} ({cover.id}) — {cover.protection:+.1f}%' if cover else 'Отсутствует'}``
+> *Номер хода:* ``{self.turn_number()} (текущий {self.current_turn()})``
+
+<:target:1251276620384305244> **Текущая цель:** ``{f'id:{data.current_target}' if data.current_target else 'Отсутствует'}``
+{f'> *Ближний бой:* ``{data.melee_target}``' if data.melee_target else ''} {overwatch if overwatch else ''}{melee if melee else ''}{hunt if hunt else ''}{contain if contain else ''}
+
+'''
+        return total_text
+
+    def set_melee_target(self, enemy_id: int):
+        if self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {enemy_id} AND battle_id = {self.current_battle_id} AND layer_id = {self.current_layer_id}'):
+            return ActorCombat(self.id, data_manager=self.data_manager).set_melee_target(enemy_id)
+        else:
+            return False
+
+    def range_attack(self, enemy_id:int=None, weapon_id:int=None):
+        enemy_id = enemy_id if enemy_id is not None else None
+        if enemy_id is None and self.actor_attributes.current_target:
+            enemy_id = self.actor_attributes.current_target
+
+        if enemy_id is not None:
+            return ActorCombat(self.id, data_manager=self.data_manager).range_attack(enemy_id, weapon_id=weapon_id)
+        else:
+            return False
+
+    def melee_attack(self, enemy_id:int=None, weapon_id:int=None):
+        enemy_id = enemy_id if enemy_id else None
+        if enemy_id not in self.actor_attributes.melee_target_from:
+            enemy_id = None
+        if not enemy_id and self.actor_attributes.melee_target:
+            enemy_id = self.actor_attributes.melee_target
+        if not enemy_id and self.actor_attributes.melee_target_from:
+            enemy_id = random.choice(self.actor_attributes.melee_target_from)
+
+        if enemy_id:
+            return ActorCombat(self.id, data_manager=self.data_manager).melee_attack(enemy_id, weapon_id=weapon_id)
+        else:
+            return False
+
+    def race_attack(self, enemy_id:int=None, attack_id:str=None):
+        enemy_id = enemy_id if enemy_id else None
+        if not enemy_id and self.actor_attributes.current_target:
+            enemy_id = self.actor_attributes.current_target
+
+        if enemy_id:
+            return ActorCombat(self.id, data_manager=self.data_manager).race_attack(enemy_id, attack_id=attack_id)
+        else:
+            return False
+
+    def throw_grenade(self, enemy_id:int=None, grenade_id:int=None):
+        enemy_id = enemy_id if enemy_id else None
+        if not enemy_id and self.actor_attributes.current_target:
+            enemy_id = self.actor_attributes.current_target
+
+        if enemy_id:
+            return ActorCombat(self.id, data_manager=self.data_manager).throw_grenade(enemy_id, grenade_id=grenade_id)
+        else:
+            return False
+
+    def reload(self, weapon_id:int=None, item_id:int=None):
+        return self.actor_attributes.reload(weapon_id=weapon_id, item_id=item_id)
+
     def __repr__(self):
         return f'Actor[ID: {self.id}]'
+

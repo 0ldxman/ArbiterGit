@@ -1,7 +1,7 @@
 import random
 
 from ArbDatabase import DataManager
-from ArbDamage import Damage, Penetration, DamageType
+from ArbDamage import Damage, Penetration
 
 class Ammunition:
     def __init__(self, ammo_id: str, **kwargs):

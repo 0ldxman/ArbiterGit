@@ -15,7 +15,8 @@ class Material:
         self.WeaponFactor = data.get('weapon_factor', 0)
         self.Rare = data.get('rarity', False)
         self.Biom = data.get('biome', '')
-        self.DisguiseFactor = data.get('disguise_factor')
+        self.DisguiseFactor = data.get('disguise_factor', 1)
+        self.Tier = data.get('tier', 0)
 
     def fetch_data(self) -> dict:
         if self.data_manager.select_dict('MATERIALS',filter=f'id = "{self.ID}"') is None:

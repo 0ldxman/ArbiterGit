@@ -87,6 +87,7 @@ class Roll:
 
 class RollSkill:
     def __init__(self, skill_value:int, **kwargs):
+        self.baff = kwargs.get('buff', 0)
         self.max_roll = max(0, 50 + skill_value)
 
         self.min_roll = 0 + kwargs.get('min_bonus',0)
@@ -102,7 +103,7 @@ class RollSkill:
 
         self.max_char_bonus = self.max_char_roll + self.max_add_char_roll if kwargs.get('stack_chars', False) and a_char else max(self.max_char_roll, self.max_add_char_roll)
 
-        cap = kwargs.get('capacity_value', 100)
+        cap = kwargs.get('capacity_value', 100) if 'capacity_value' in kwargs else 100
         self.cap_koef = cap / 100
 
         a_cap = kwargs.get('add_capacity_value', None)
@@ -111,7 +112,7 @@ class RollSkill:
         self.dice = self.roll_dice()
 
     def roll_dice(self):
-        return round((random.randint(self.min_roll, self.max_roll) + random.randint(min(0, self.max_char_roll), max(0, self.max_char_bonus))) * self.cap_koef * self.a_cap_koef * self.pain_factor)
+        return round((random.randint(self.min_roll, self.max_roll) + random.randint(min(0, self.max_char_roll), max(0, self.max_char_bonus))) * self.cap_koef * self.a_cap_koef * self.pain_factor + self.baff)
 
     def reroll_dice(self, n:int):
         for _ in range(n):

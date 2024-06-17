@@ -4,6 +4,8 @@ from ArbDatabase import DataManager
 import pprint
 import random
 from ArbSkills import TraitsTree, Trait, Skill, Charac
+from ArbUtils.ArbTextgen import CallsGenerator
+from typing import List, Dict, Optional
 
 
 def RandomQuality():
@@ -16,12 +18,31 @@ def RandomQuality():
         else:
             return random.choice(['Ужасное','Плохое','Хорошее','Отличное'])
 
-def RandomMaterial(material_type:str, **kwargs):
+def RandomMaterial(material_type:str, tier:int, **kwargs):
     data_manager = kwargs.get('data_manager', DataManager())
-    c_roll = random.randint(1, 100)
-    c_materials = [mat['id'] for mat in data_manager.select_dict('MATERIALS','*',f'type = "{material_type}" AND rarity <= {c_roll}')]
+
+    min_rarity = data_manager.minValue('MATERIALS','rarity',f'type = "{material_type}"')
+
+    c_roll = random.randint(min_rarity, 100)
+    c_materials = [mat['id'] for mat in data_manager.select_dict('MATERIALS','*',f'type = "{material_type}" AND rarity <= {c_roll} AND tier <= {tier}')]
 
     return random.choice(c_materials)
+
+
+def NameGenerator(gender:str):
+    if gender.lower() in ['м','мужской','мужчина','муж','male','m']:
+        name = CallsGenerator('ArbUtils/data_models/male_names.csv').generate_text(use_trigrams=False)
+    elif gender.lower() in ['ж','женский','женщина','девушка','жен','female','fem','f']:
+        name = CallsGenerator('ArbUtils/data_models/female_names.csv').generate_text(use_trigrams=False)
+    elif gender.lower() in ['робот','robot','ai','android']:
+        return CallsGenerator('ArbUtils/data_models/robot_names.csv').generate_text(use_trigrams=False)
+    else:
+        return CallsGenerator('ArbUtils/data_models/male_names.csv').generate_text(use_trigrams=False)
+
+    surname = CallsGenerator('ArbUtils/data_models/surnames.csv').generate_text(use_trigrams=False)
+
+    return f'{name} {surname}'
+
 
 
 class ItemManager:
@@ -31,6 +52,7 @@ class ItemManager:
         self.item_type = item_type
         self.name = kwargs.get('name', self.get_item_name_from_db())
         self.value = kwargs.get('value', 1)
+        self.material_tier = kwargs.get('material_tier', 1)
         self.item_material = kwargs.get('material', None)
         self.item_quality = kwargs.get('quality', RandomQuality())
         self.biocode = kwargs.get('biocode', None)
@@ -42,6 +64,11 @@ class ItemManager:
         if 'character_id' in kwargs.keys():
             self.character_id = kwargs.get('character_id', None)
             self.slot = kwargs.get('slot', None)
+            self.bullets = -1 if kwargs.get('inf_bullets', True) else 0
+            print('БЕСК. ПАТРОНЫ', self.bullets, kwargs.get('inf_bullets'))
+            self.ammo_id = kwargs.get('ammo_id', None)
+            self.inventory = kwargs.get('inventory_id', -1)
+
             self.add_to_character()
 
     def get_item_class_from_db(self):
@@ -67,9 +94,9 @@ class ItemManager:
     def random_material(self):
         if self.data_manager.check('CLOTHES',f'id = "{self.item_type}"'):
             c_type = self.data_manager.select_dict('CLOTHES',filter=f'id = "{self.item_type}"')[0].get('material_type', None)
-            return RandomMaterial(material_type=c_type)
+            return RandomMaterial(material_type=c_type, tier=self.material_tier)
         elif self.data_manager.check('WEAPONS',f'id = "{self.item_type}" AND class = "ColdSteel"'):
-            return RandomMaterial(material_type='Металл')
+            return RandomMaterial(material_type='Металл', tier=self.material_tier)
         else:
             return None
 
@@ -106,13 +133,34 @@ class ItemManager:
             return None
 
     def add_to_character(self):
-        c_prompt = {
-            'character_id': self.character_id,
-            'item_id': self.id,
-            'slot': self.slot
-        }
         try:
-            self.data_manager.insert('CHARS_INVENTORY', c_prompt)
+            if self.item_class == 'Одежда':
+                c_prompt = {
+                    'id': self.character_id,
+                    'item_id': self.id,
+                    'slot': self.slot,
+                    'bullets': None,
+                    'ammo_id': None
+                }
+
+                self.data_manager.insert('CHARS_EQUIPMENT', c_prompt)
+            elif self.item_class == 'Оружие':
+                c_prompt = {
+                    'id': self.character_id,
+                    'item_id': self.id,
+                    'slot': self.slot,
+                    'bullets': self.bullets,
+                    'ammo_id': self.ammo_id
+                }
+
+                self.data_manager.insert('CHARS_EQUIPMENT', c_prompt)
+            else:
+                c_prompt = {
+                    'id': self.id,
+                    'inventory': self.inventory
+                }
+                self.data_manager.insert('INVENTORY_ITEMS', c_prompt)
+
             self.data_manager.logger.info(f'Предмет {self.item_type} ({self.id}) был успешно добавлен персонажу {self.character_id}')
             return True
         except Exception as e:
@@ -120,199 +168,143 @@ class ItemManager:
             return False
 
 
-class WordGenerator:
-    def __init__(self):
-        self.vowels = ['а', 'о', 'у', 'э', 'е', 'и']
-        self.consonants = ['б', 'в', 'г', 'д', 'з', 'к', 'л', 'м', 'н', 'п', 'р', 'с', 'т', 'х', 'ч', 'ш']
+def create_inventory(label:str=None, owner:int=None, type:str=None, **kwargs):
+    data_manager = kwargs.get('data_manager', DataManager())
 
-        self.doubles = ['с','л','р','н','б','к','м','п','а']
+    c_id = data_manager.maxValue('INVENTORY_INIT','id') + 1
 
-        self.endings_vowels = ['чк', 'ца', 'вич', 'чик', 'лин', 'шир', 'ль', 'сон', '', 'кт','йт','дж', 'чж']
-        self.endings_consonants = ['ер', 'ин', 'ов', 'ан', 'ир', 'ая', 'ев', 'ов', 'ек', 'ив', '', 'инт','инг','окт']
+    prompt = {
+        'id': c_id,
+        'label': label if label else f'Хранилище {c_id}',
+        'owner': owner if owner else None,
+        'type': type if type else 'Инвентарь'
+    }
 
-    def add_ending(self, word:str):
-        if word[-1] in self.vowels:
-            return word + random.choice(self.endings_vowels)
-        else:
-            return word + random.choice(self.endings_consonants)
+    data_manager.insert('INVENTORY_INIT', prompt)
 
-    def syllable(self, letters:int=None, last_lettr:str=None):
-        c_len = letters if letters else 2
-        l_letter = last_lettr if last_lettr else ''
-
-        c_word = ''
-        if l_letter:
-            if l_letter in self.vowels:
-                result_list = [item for item in self.consonants if item not in ['дж','чж','йт']]
-                c_word = random.choice(self.consonants)
-            else:
-                c_word = random.choice(self.vowels)
-        else:
-            c_word += random.choice(self.vowels + self.consonants) if letters > 1 else random.choice(self.vowels)
-        c_len -= 1
-
-        while c_len != 0:
-            if c_word[-1] in self.vowels:
-                c_word += random.choice(self.consonants)
-            else:
-                c_word += random.choice(self.vowels)
-
-            if c_word[-1] in self.doubles:
-                if random.randint(0, 100) > 80:
-                    c_word += c_word[-1]
-
-            c_len -= 1
-
-        return c_word
-
-    def new_word(self, syllables:int=2, ending:bool = True):
-        c_word = self.syllable(random.randint(1,3))
-        syllables -= 1
-        last_len = 0
-        for i in range(syllables):
-            if last_len < 3 and ('`' not in c_word or ' ' in c_word):
-                c_prefix = random.choice(['`']) if random.randint(0, 100) > 80 else ''
-            else:
-                c_prefix = ''
-
-            c_word += f"{c_prefix}{self.syllable(random.randint(1, 3))}"
-        if ending:
-            c_word = self.add_ending(c_word)
-        else:
-            pass
-
-        return c_word
+    return c_id
 
 
-class NewCharacter:
+class GenerateCharacter:
+    BASE_POINTS = 100
+    DANGER_MULTIPLIER = 50
+    AGE_BONUS_THRESHOLD = 30
+    AGE_BONUS_FACTOR = 5
+    CP_TO_BUDGET = 500
+    BASE_CHARACTERISTIC = 20
+    BASE_SKILL = 50
+    MAX_SKILLS = 6
+
     def __init__(self, **kwargs):
-        self.input_pars = {key.lower(): value for key, value in kwargs.items()}
+        self.input_pars = kwargs
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.id = kwargs.get('id', self.data_manager.maxValue('CHARS_INIT', 'id')+1)
+        self.owner = kwargs.get('owner', None)
 
-        self.__dict__.update(self.input_pars)
-        self.data_manager = self.input_pars.get('data_manager', DataManager())
-        self.generate_main_info()
+        self.gender = kwargs.get('gender', random.choice(['Мужчина', 'Женщина']))
+        self.name = kwargs.get('name', NameGenerator(self.gender))
+        self.callsign = kwargs.get('callsign', None)
+        self.custom_id = kwargs.get('custom_id', None)
+        self.age = kwargs.get('age', random.randint(25, 50))
+        self.race = kwargs.get('race', 'Human')
 
-        self.budget = self.input_pars.get('budget', random.randint(50000, 100000))
+        self.org = kwargs.get('org', None)
+        self.org_lvl = kwargs.get('org_lvl', None)
+        self.frac = kwargs.get('frac', None)
+        self.frac_lvl = kwargs.get('frac_lvl', None)
 
-        self.characteristics = self.input_pars.get('characteristics', self.generate_characteristics())
+        self.location = kwargs.get('location', None)
 
-        self.max_tier = self.input_pars.get('max_tier', 2)
-        self.min_tier = self.input_pars.get('min_tier', 0)
+        self.avatar = kwargs.get('avatar', None)
+        self.update = kwargs.get('update', datetime.datetime.now().date().__str__())
+        self.server = kwargs.get('server', None)
 
-        if 'traits' in self.input_pars:
-            self.traits = self.input_pars.get('traits')
-        else:
-            self.traits = self.generate_traits()
+        self.danger = kwargs.get('danger', random.randint(1,5))
+        self.character_points = self.calculate_character_points(kwargs.get('character_points', 0))
 
-        if 'skills' in self.input_pars:
-            self.skills_values = self.input_pars.get('skills')
-        else:
-            self.skills = self.generate_skills()
-            self.mastery = self.generate_mastery()
-            self.talants = self.generate_talents()
+        self.budget = self.calculate_budget()
+        self.min_tier = kwargs.get('min_tier', 1)
+        self.max_tier = kwargs.get('max_tier', 3)
 
-            self.skills_values = {}
-            for skill in self.skills.keys():
-                self.skills_values[skill] = {'lvl': self.skills[skill],
-                                      'talant': self.talants[skill],
-                                      'mastery': self.mastery[skill]}
+        self.characteristics = self.generate_characteristics()
+        self.skills = self.generate_skills_values()
+        self.weapon = self.choose_weapon()
+        self.armors = self.generate_armor()
 
+        self.scars = kwargs.get('scars',self.generate_scars(random.randint(1, 5)))
 
-        self.weapon = self.input_pars.get('weapons', self.generate_weapon())
-        if self.weapon:
-            self.weapon = random.choice(self.weapon).get('id')
-        else:
-            self.weapon = None
+        self.worldview = kwargs.get('worldview', self.generate_worldview())
+        self.stress = kwargs.get('stress', random.randint(0, 10))
+        rep, loyalty = self.generate_loyalty()
 
-        self.armors = self.input_pars.get('armors', self.generate_armor())
+        self.rep = kwargs.get('reputation', rep)
+        self.loyalty = kwargs.get('loyalty', loyalty)
 
-    def generate_main_info(self):
-        self.id = self.input_pars.get('id', self.data_manager.maxValue('CHARS_INIT','id') + 1)
+    def calculate_character_points(self, bonus:int) -> int:
+        base_points = self.BASE_POINTS
+        danger_points = self.danger * self.DANGER_MULTIPLIER
+        age_bonus = (self.age - self.AGE_BONUS_THRESHOLD) // self.AGE_BONUS_FACTOR if self.age > self.AGE_BONUS_THRESHOLD else 0
 
-        self.name = self.input_pars.get('name',f'{WordGenerator().new_word().capitalize()} {WordGenerator().new_word().capitalize()}')
-        self.custom_id = self.input_pars.get('custom_id',None)
-        self.owner = self.input_pars.get('owner', None)
-        self.callsign = self.input_pars.get('callsign', None)
-        self.org = self.input_pars.get('org', None)
-        self.org_lvl = self.input_pars.get('org_lvl', None)
-        self.fraction = self.input_pars.get('frac', None)
-        self.fraction_lvl = self.input_pars.get('frac_lvl', None)
-        self.avatar_picture = self.input_pars.get('avatar', None)
-        self.update = self.input_pars.get('update', f'{datetime.datetime.now().date()}')
-        self.server = self.input_pars.get('server', None)
-        self.sex = self.input_pars.get('gender', 'Неизвестно')
-        self.age = self.input_pars.get('age', random.randint(25, 45))
-        self.race = self.input_pars.get('race', 'Human')
+        character_points = base_points + danger_points + age_bonus + bonus
+        return character_points
 
-        self.location = self.input_pars.get('location', None)
-        self.group_id = self.input_pars.get('group_id', None)
+    def calculate_budget(self):
+        return self.character_points * self.CP_TO_BUDGET
 
-    def generate_characteristics(self):
-        c_delta = self.input_pars.get('chars_delta', 0)
-        c_bonus = self.input_pars.get('chars_bonus', 0)
-
-        char_points = (self.age - 30) // 5 + c_bonus
-        chars_values = {
-            'Сила': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Ловкость': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Выносливость': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Реакция': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Привлекательность': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Интеллект': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
-            'Уравновешанность': random.randint(max(0, 20 - c_delta), max(0, 20 + c_delta)),
+    def generate_characteristics(self) -> dict[str, int]:
+        points_available = self.character_points // 4
+        base_characteristics = {
+            'Сила': self.BASE_CHARACTERISTIC,
+            'Ловкость': self.BASE_CHARACTERISTIC,
+            'Выносливость': self.BASE_CHARACTERISTIC,
+            'Реакция': self.BASE_CHARACTERISTIC,
+            'Привлекательность': self.BASE_CHARACTERISTIC,
+            'Интеллект': self.BASE_CHARACTERISTIC,
+            'Уравновешанность': self.BASE_CHARACTERISTIC,
+            'Связь': random.randint(0, 100)
         }
 
-        for char in chars_values.keys():
-            char_points += 20 - chars_values[char]
+        while points_available > 0:
+            for char in base_characteristics.keys():
+                if points_available <= 0:
+                    break
+                if char == 'Связь':
+                    continue
+                increase = random.randint(1, min(5, points_available))
+                base_characteristics[char] += increase
+                points_available -= increase
 
-        for char in chars_values.keys():
-            if char_points <= 0:
-                break
-            else:
-                c_points = random.randint(min(char_points, 1), max(char_points, 0))
-                char_points -= c_points
-                chars_values[char] += c_points
+        return base_characteristics
 
-        if char_points > 0:
-            chars_values[random.choice(list(chars_values.keys()))] += char_points
-
-        chars_values['Связь'] = random.randint(0, 100)
-
-        return chars_values
-
-    def fetch_skills(self):
+    def fetch_skills(self) -> list[dict]:
         return self.data_manager.select_dict('SKILL_INIT')
 
-    def available_traits(self, traits_list: list):
-        if not traits_list:
-            return [trait[0] for trait in self.data_manager.select('TRAITS_INIT', 'id', 'lvl = 0')]
-        else:
-            available_traits = []
-            for trait_dict in self.data_manager.select_dict('TRAITS_INIT', filter='lvl = 0'):
-                trait_id = trait_dict['id']
-                if trait_id not in traits_list and trait_dict['exception'] not in traits_list:
-                    available_traits.append(trait_id)
+    def generate_skills_values(self) -> dict[str, dict[str, float]]:
+        skills = self.generate_skills()
+        mastery = self.generate_mastery(skills)
+        talents = self.generate_talents(skills)
 
-            for trait in traits_list:
-                trait_data = self.data_manager.select_dict('TRAITS_INIT', filter=f'id = "{trait}"')[0]
-                if trait_data:
-                    c_tree = trait_data.get('tree')
-                    c_traits = TraitsTree(c_tree, current_trait_id=trait).random_next_trait()
-                    if c_traits is not None and c_traits['id'] not in traits_list and c_traits.get(
-                            'exception') not in traits_list:
-                        available_traits.append(c_traits['id'])
+        skills_values = {
+            skill: {'lvl': round(min(level, 100 * mastery[skill])), 'talent': talents[skill], 'mastery': mastery[skill]}
+            for skill, level in skills.items()
+        }
 
-            return available_traits
+        return skills_values
 
-    def generate_skills(self):
-        c_bonus = self.input_pars.get('skills_bonus', 0)
+    def generate_talents(self, skills: dict[str, int]) -> dict[str, float]:
+        max_talent = min(2 + self.danger, 2)  # Максимальное значение таланта зависит от уровня опасности
+        return {skill: round(random.uniform(0, max_talent), 2) for skill in skills}
 
-        skill_points = 150 + (self.age - 30) // 2 + c_bonus
+    def generate_mastery(self, skills: dict[str, int]) -> dict[str, float]:
+        max_mastery = min(2 + self.danger, 2)  # Максимальное значение мастерства зависит от уровня опасности
+        return {skill: round(random.uniform(0, max_mastery), 2) for skill in skills}
+
+    def generate_skills(self) -> dict[str, int]:
+        skill_points = self.character_points // 2
         skills_values = {}
 
         skills_info = self.fetch_skills()
-
-        skills_count = self.input_pars.get('skills_count', random.randint(min(skill_points//50, 3), skill_points // 50))
+        skills_count = min(self.MAX_SKILLS, 2 + self.danger)  # Максимальное количество навыков зависит от уровня опасности
 
         skills_types = {}
         for skill in skills_info:
@@ -322,19 +314,12 @@ class NewCharacter:
             else:
                 skills_types[role].append(skill.get('id'))
 
-        # Выбор хотя бы одного боевого навыка
-        chosen_skill = random.choice(skills_types.get('Ближний бой') + skills_types.get('Стрельба'))
-
-        c_points = random.randint(10, min(skill_points, 100))  # Прокачка хотя бы 10 очков для боевого навыка
-        skills_values[chosen_skill] = c_points
-        skills_count -= 1
-        skill_points -= c_points
-
         while skills_count > 0 and skill_points > 1:
-            c_skill_name = random.choice(list(skills_types[random.choice(list(skills_types.keys()))]))
+            role = random.choice(list(skills_types.keys()))
+            c_skill_name = random.choice(skills_types[role])
             if c_skill_name not in skills_values:
-                c_points = random.randint(max(0, skill_points // skills_count), min(skill_points, 100))
-                skills_values[c_skill_name] = c_points
+                c_points = random.randint(1, min(skill_points, 100))
+                skills_values[c_skill_name] = self.BASE_SKILL + c_points
                 skills_count -= 1
                 skill_points -= c_points
 
@@ -344,87 +329,81 @@ class NewCharacter:
 
         return skills_values
 
-    def generate_talents(self):
-        talants = 2 - (self.age - 30) // 5
-        count_skills = len(list(self.skills.keys()))
-        avr_talant = talants / count_skills
+    def choose_default_weapon(self):
+        if not self.org or self.org == 'Civil':
+            return None
+        else:
+            return random.choice(['SpecialPistol','LargeCaliberPistol','HighRatePistol'])
 
-        total = {}
-        for skill in self.skills:
-            total[skill] = 1 + round(random.uniform(min(1, avr_talant), max(1, avr_talant)), 2)
+    def choose_weapon(self) -> Optional[str]:
+        weapons = self.input_pars.get('weapons', self.generate_weapon())
+        return random.choice(weapons).get('id') if weapons else self.choose_default_weapon()
 
-        return total
+    def fetch_race_parts(self) -> List[Dict[str, str]]:
+        return self.data_manager.select_dict('RACES_BODY', filter=f'race = "{self.race}"')
 
-    def generate_mastery(self):
-        mastery = 1 + (self.age - 30) // 5
-        count_skills = len(list(self.skills.keys()))
-        avr_mastery = mastery / count_skills
-
-        total = {}
-        for skill in self.skills:
-            total[skill] = 1 + round(random.uniform(min(1, avr_mastery), max(1, avr_mastery)), 2)
-
-        return total
-
-    def generate_traits(self):
-        c_bonus = self.input_pars.get('traits_bonus', 0)
-        trait_points = 20 + (self.age - 30) // 5 + c_bonus
-        c_traits = []
-        for i in range(trait_points):
-            c_available = self.available_traits(c_traits)
-            c_traits.append(random.choice(c_available))
-
-        return c_traits
-
-    def fetch_race_parts(self):
-        return self.data_manager.select_dict('RACES_BODY',filter=f'race = "{self.race}"')
-
-    def generate_weapon(self):
+    def generate_weapon(self) -> List[Dict[str, str]]:
         c_parts = self.fetch_race_parts()
-        total_slots = 0
-        for _ in c_parts:
-            total_slots += _.get('weapon_slot',0) if _.get('weapon_slot',0) is not None else 0
+        total_slots = sum(_.get('weapon_slot', 0) for _ in c_parts)
 
         total_weapons = []
 
         for skill in self.skills.keys():
-            if self.data_manager.check('WEAPONS',filter=f'class = "{skill}"'):
-                c_weapon_list = self.data_manager.select_dict('WEAPONS',filter=f'class = "{skill}" AND tier <= {self.max_tier} AND tier > {self.min_tier} AND cost <= {self.budget * 0.5}')
+            if self.data_manager.check('WEAPONS', filter=f'class = "{skill}"'):
+                c_weapon_list = self.data_manager.select_dict('WEAPONS',
+                                                              filter=f'class = "{skill}" AND tier <= {self.max_tier} AND tier >= {self.min_tier} AND cost <= {self.budget * 0.5} AND slot <= {total_slots}')
                 total_weapons += c_weapon_list
 
         return total_weapons
 
-    def generate_armor(self):
+    def generate_armor(self) -> Dict[str, Dict[str, Dict[str, str]]]:
         c_parts = self.fetch_race_parts()
-        total_slots = []
-        for _ in c_parts:
-            if _.get('name') is not None and _.get('name') not in total_slots:
-                total_slots.append(_.get('name'))
+        print(c_parts)
+        total_slots = {_.get('name'): {} for _ in c_parts if _.get('name')}  # Initialize with an empty dictionary for each slot
 
-        avr_cost = (self.budget * 0.5) / len(total_slots)
+        if not total_slots:
+            return {}
 
-        total_clothes = {}
+        avr_cost = self.budget * 0.5 / len(total_slots)
 
-        allowed_clothes = {}
-        for slot in total_slots:
-            c_clothes = self.data_manager.select_dict('CLOTHES',filter=f'slot = "{slot}" AND cost <= {avr_cost} AND tier <= {self.max_tier} AND tier > {self.min_tier}')
-            allowed_clothes[slot] = {}
-
+        for slot in total_slots.keys():
+            total_slots[slot] = {}
+            c_clothes = self.data_manager.select_dict('CLOTHES',
+                                                      filter=f'slot = "{slot}" AND cost <= {avr_cost} AND tier <= {self.max_tier} AND tier >= {self.min_tier}')
             for cloth in c_clothes:
-                if cloth.get('layer',None) in allowed_clothes[slot]:
-                    allowed_clothes[slot][cloth.get('layer',None)].append(cloth)
-                else:
-                    allowed_clothes[slot][cloth.get('layer', None)] = [cloth]
+                layer = cloth.get('layer')
+                if layer not in total_slots[slot]:
+                    total_slots[slot][layer] = []
+                total_slots[slot][layer].append(cloth)
 
-        for slot in allowed_clothes.keys():
-            total_clothes[slot] = {}
-            for index in allowed_clothes[slot].keys():
-                total_clothes[slot][index] = random.choice(allowed_clothes[slot][index])
+        total_clothes = {slot: {layer: random.choice(clothes) for layer, clothes in layers.items()} for slot, layers in
+                         total_slots.items()}
 
         return total_clothes
 
-    def generate_equipment(self):
-        pass
+    def random_scar(self) -> str:
+        parts = self.fetch_race_parts()
+        candidates = [part for part in parts if part.get('internal', 1) == 0]
+        return random.choice(candidates).get('part_id') if random.randint(0, 100) >= 85 else None
+
+    def generate_scars(self, num:int=1) -> list[str]:
+        scars = []
+        for _ in range(num):
+            part = self.random_scar()
+            if part:
+                scars.append(part)
+
+        return scars
+
+    def generate_worldview(self):
+        worldviews: list[dict] = self.data_manager.select_dict('WORLDVIEW')
+        return random.choice(worldviews).get('id')
+
+    def generate_loyalty(self):
+        if self.org:
+            return random.randint(-100, 100), random.randint(0, 100)
+        else:
+            return 0, 0
 
     def insert_data(self):
         main_info_query = {
@@ -435,15 +414,17 @@ class NewCharacter:
             'callsign': self.callsign,
             'age': self.age,
             'race': self.race,
-            'sex': self.sex,
+            'sex': self.gender,
             'org': self.org,
             'org_lvl': self.org_lvl,
-            'frac': self.fraction,
-            'frac_lvl': self.fraction_lvl,
-            'avatar': self.avatar_picture,
+            'frac': self.frac,
+            'frac_lvl': self.frac_lvl,
+            'avatar': self.avatar,
             'update': self.update,
             'server': self.server
         }
+
+        self.data_manager.insert('CHARS_INIT', main_info_query)
 
         combat_info_query = {
             'id': self.id,
@@ -460,15 +441,30 @@ class NewCharacter:
             'melee_target': None
         }
 
-        self.data_manager.insert('CHARS_INIT',main_info_query)
         self.data_manager.insert('CHARS_COMBAT', combat_info_query)
 
-        for n_skill in self.skills_values.keys():
+        worldview_query = {
+            'id': self.id,
+            'worldview': self.worldview,
+            'stress': self.stress
+        }
+        self.data_manager.insert('CHARS_PSYCHOLOGY', worldview_query)
+
+        if self.org:
+            loyalty_query = {
+                'id': self.id,
+                'org': self.org,
+                'rep': self.rep,
+                'loyalty': self.loyalty
+            }
+            self.data_manager.insert('CHARS_REPUTATION', loyalty_query)
+
+        for n_skill in self.skills:
             s_query = {'id': self.id,
                        'skill_id': n_skill,
-                       'lvl': self.skills_values[n_skill]['lvl'],
-                       'talant': self.skills_values[n_skill]['talant'],
-                       'master': self.skills_values[n_skill]['mastery'],
+                       'lvl': self.skills[n_skill]['lvl'],
+                       'talant': self.skills[n_skill]['talent'],
+                       'master': self.skills[n_skill]['mastery'],
                        'exp': 0}
 
             self.data_manager.insert('CHARS_SKILLS', s_query)
@@ -479,19 +475,17 @@ class NewCharacter:
                        'lvl': self.characteristics[charac]}
             self.data_manager.insert('CHARS_CHARS', c_query)
 
-        for trait in self.traits:
-            t_query = {'id': self.id,
-                       'trait': trait}
-            self.data_manager.insert('CHARS_TRAITS', t_query)
+        inventory = create_inventory(f'Инвентарь {self.name}', self.id, 'Инвентарь', data_manager=self.data_manager)
 
         if self.weapon:
-            ItemManager(self.weapon, character_id=self.id, slot='Оружие')
+            inf_bullets = True if not self.owner else False
+            ItemManager(self.weapon, material_tier=self.max_tier, character_id=self.id, slot='Оружие', endurance=random.randint(50, 100), inventory=inventory, inf_bullets=inf_bullets)
 
         for slot in self.armors.keys():
             for layer in self.armors[slot].keys():
                 c_item = self.armors[slot][layer]
-                ItemManager(c_item['id'], character_id=self.id, slot=c_item.get('slot', None))
+                ItemManager(c_item['id'], material_tier=self.max_tier, character_id=self.id, slot=c_item.get('slot', None), endurance=c_item.get('endurance', 100), inventory=inventory)
 
+        return self.__dict__
 
-#for _ in range(25):
-#    print(WordGenerator().new_word(2).capitalize(), WordGenerator().new_word(2).capitalize())
+pprint.pprint(GenerateCharacter().insert_data())

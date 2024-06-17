@@ -1,4 +1,5 @@
-from ArbItems import *
+from ArbDatabase import DataManager
+from ArbItems import Item
 from dataclasses import dataclass
 
 
@@ -164,6 +165,51 @@ class Clothes(Item, ClothesInit):
 
     def __repr__(self):
         return f'Armor.{self.cloth_id}.{self.Material.ID}.{self.Quality.Name}'
+
+
+class CharacterArmors:
+    def __init__(self, id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.id = id
+
+    def armors_id(self) -> dict:
+        if not self.data_manager.check('CHARS_EQUIPMENT', f'id = {self.id}'):
+            return {}
+
+        c_equipment_data = self.data_manager.select_dict('CHARS_EQUIPMENT',
+                                                         filter=f'id = {self.id} AND slot != "Оружие"')
+        equipment = {}
+
+        for slot in c_equipment_data:
+            c_slot = slot.get('slot')
+            c_id = slot.get('item_id')
+            c_layer = Clothes(c_id, data_manager=self.data_manager).Layer
+
+            if c_slot not in equipment.keys():
+                equipment[c_slot] = {c_layer: c_id}
+            else:
+                equipment[c_slot][c_layer] = c_id
+
+        return equipment
+
+    def armors_protection(self) -> dict:
+        if not self.data_manager.check('CHARS_EQUIPMENT', f'id = {self.id}'):
+            return {}
+
+        c_equipment_data = self.data_manager.select_dict('CHARS_EQUIPMENT',
+                                                         filter=f'id = {self.id} AND slot != "Оружие"')
+        equipment = {}
+
+        for slot in c_equipment_data:
+            c_slot = slot.get('slot')
+            c_id = slot.get('item_id')
+            c_layer = Clothes(c_id, data_manager=self.data_manager).Layer
+            if c_slot not in equipment.keys():
+                equipment[c_slot] = {c_layer: Clothes(c_id, data_manager=self.data_manager).armor_protection()}
+            else:
+                equipment[c_slot][c_layer] = Clothes(c_id, data_manager=self.data_manager).armor_protection()
+
+        return equipment
 
 
 

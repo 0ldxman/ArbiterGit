@@ -1,5 +1,7 @@
 import discord
+from discord import default_permissions
 from discord.ext import commands
+from ArbUIUX import ErrorEmbed, SuccessEmbed
 import json
 import os
 
@@ -18,10 +20,6 @@ async def on_ready():
 @bot.slash_command(name='test_slash_command', description='Описание команды')
 async def test(ctx):
      await ctx.respond('Успешный тест!')
-
-
-db = DataManager()
-db.update('META_INFO',{'playing_as': 0}, filter=f'id = 453133967902900225')
 
 # @bot.slash_command(name='option_test')
 # async def __test(

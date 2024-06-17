@@ -1,3 +1,5 @@
+import math
+
 from ArbDatabase import *
 from ArbItems import Item
 from ArbAmmo import Bullet, Ammunition, Grenade
@@ -39,11 +41,10 @@ class RangeWeapon(WeaponInit):
         super().__init__(id, data_manager=self.data_manager)
         range_data = self.fetch_data_range()
 
-        if range_data:
-            self.MagSpace = range_data.get('mag', 0)
-            self.Mode = range_data.get('mode', '')
-            self.Accuracy = range_data.get('accuracy',0)
-            self.Caliber = range_data.get('caliber','')
+        self.MagSpace = range_data.get('mag', 0)
+        self.Mode = range_data.get('mode', '')
+        self.Accuracy = range_data.get('accuracy',0)
+        self.Caliber = range_data.get('caliber','')
 
     def fetch_data_range(self) -> dict:
         return self.data_manager.select_dict('WEAPONS', '*', filter=f'id = "{self.weapon_id}"')[0]
@@ -156,14 +157,15 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
         return accuracy
 
     def current_bullets(self):
-        if self.data_manager.check('CHARS_MAGAZINE',filter=f'weapon_id = {self.ID}'):
-            return WeaponAmmo(self.weapon_id, data_manager=self.data_manager).current_bullets
+        if self.data_manager.check('CHARS_EQUIPMENT',filter=f'item_id = {self.ID}'):
+            return self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'item_id = {self.ID}')[0].get('bullets')
         else:
             return -1
 
     def get_current_ammo(self):
-        if self.data_manager.check('CHARS_MAGAZINE',filter=f'weapon_id = {self.ID}'):
-            return WeaponAmmo(self.weapon_id, data_manager=self.data_manager).get_ammo_type()
+        if self.data_manager.check('CHARS_EQUIPMENT',filter=f'item_id = {self.ID}'):
+            ammo = self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'item_id = {self.ID}')[0]
+            return Ammunition(ammo.get('ammo_id'), data_manager=self.data_manager)
         else:
             c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO',filter=f'caliber = "{self.Caliber}"')]
             return Ammunition(random.choice(c_bullets), data_manager=self.data_manager)
@@ -175,6 +177,75 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
 
     def range_damage(self):
         return self.get_current_ammo().fire()
+
+    def get_range_attack_cost(self):
+        if self.Class == 'ColdSteel':
+            return math.inf
+        else:
+            return self.ActionPoints
+
+    def get_melee_attack_cost(self):
+        return self.ActionPoints
+
+    def reload_bullets_count(self):
+        space = self.MagSpace
+        return space
+
+    def can_be_reloaded(self):
+        from ArbItems import Inventory
+
+        owner = self.owner()
+        all_ammos = self.data_manager.select_dict('AMMO', filter=f'caliber = "{self.Caliber}"')
+        ammo_can_reload = [ammo['id'] for ammo in all_ammos]
+
+        candidates = []
+        character_inventory = Inventory.get_character_inventory(owner, self.data_manager)
+        inventory = Inventory(character_inventory, data_manager=self.data_manager).get_items()
+        for item in inventory:
+            if item.Type in ammo_can_reload:
+                candidates.append(item)
+        if not candidates:
+            return None
+
+        return candidates
+
+    def reload(self, ammo_id:int=None):
+        from ArbItems import Inventory
+
+        if self.Class == 'ColdSteel':
+            return None
+        elif self.owner() is None:
+            return None
+
+        owner = self.owner()
+        all_ammos = self.data_manager.select_dict('AMMO',filter=f'caliber = "{self.Caliber}"')
+        ammo_can_reload = [ammo['id'] for ammo in all_ammos]
+
+        if ammo_id:
+            if Item(ammo_id, data_manager=self.data_manager).Type in ammo_can_reload:
+                bullets = Item(ammo_id, data_manager=self.data_manager).reload(self.reload_bullets_count())
+                self.data_manager.update('CHARS_EQUIPMENT',{'bullets': bullets, 'ammo_id': Item(ammo_id, data_manager=self.data_manager).Type},filter=f'item_id = {self.ID}')
+            else:
+                return None
+        else:
+            candidates = []
+            character_inventory = Inventory.get_character_inventory(owner, self.data_manager)
+            inventory = Inventory(character_inventory, data_manager=self.data_manager).get_items()
+            for item in inventory:
+                if item.Type in ammo_can_reload:
+                    candidates.append(item)
+            if not candidates:
+                return None
+
+            print(candidates)
+            candidate: Item = random.choice(candidates)
+            bullets = candidate.reload(self.reload_bullets_count())
+
+            self.data_manager.update('CHARS_EQUIPMENT', {'bullets': bullets, 'ammo_id': candidate.Type}, f'item_id = {self.ID}')
+            return True
+
+
+
 
 
 class WeaponAmmo:
@@ -281,6 +352,7 @@ class WeaponAmmo:
 
     def get_current_bullets(self):
         return self.current_bullets
+
 
 class HandGrenade(Item, Grenade):
     def __init__(self, item_id:int, **kwargs):

@@ -842,7 +842,7 @@ class Body:
         elif c_vital_damage >= 95:
             c_alive = False
 
-        if 50 <= c_blood_lose < 80:
+        if 60 <= c_blood_lose < 80:
             c_active = False
             c_status = 'В отключке'
         elif c_blood_lose >= 80:

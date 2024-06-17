@@ -13,6 +13,7 @@ class Sound:
         self.distance = data.get('distance', 0)
         self.detect_chance = data.get('detect_chance', 0)
         self.round_factor = data.get('round_factor', 1)
+        self.description = data.get('desc', 'Неизвестный звук')
 
     def fetch_data(self):
         if self.data_manager.check('SOUNDS',f'id = "{self.sound_id}"') is None:
@@ -56,3 +57,6 @@ class InBattleSound(Sound):
         total_chance = (self.detect_chance*volume_factor) * distance_modificator * round_factor
 
         return total_chance
+
+    def __repr__(self):
+        return f'BattleSound[{self.id},{self.sound_id}]'

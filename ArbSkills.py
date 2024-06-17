@@ -239,7 +239,7 @@ class SkillInit:
 
     def fetch_skill_data(self):
         if self.data_manager.check('SKILL_INIT',f'id = "{self.skill_id}"'):
-            return self.data_manager.select_dict('SKILL_INIT','*',f'id = "{self.skill_id}"')[0]
+            return self.data_manager.select_dict('SKILL_INIT', filter=f'id = "{self.skill_id}"')[0]
         else:
             return {}
 
@@ -517,6 +517,7 @@ class CharacterAttributes:
             CharacterCharacteristic(characteristic, total_value).add_to_character(self.id, self.data_manager)
 
     def roll_skill(self, skill:str, **kwargs):
+        baff = kwargs.get('buff', 0)
         if skill in self.skills:
             c_skill: CharacterSkill = self.skills[skill]
         else:
@@ -528,8 +529,9 @@ class CharacterAttributes:
                            add_characteristic_value= self.check_characteristic(skill_init.add_characteristic) if skill_init.add_characteristic else None,
                            capacity_value = self.check_capacity(skill_init.capacity) if skill_init.capacity else None,
                            add_capacity_value= self.check_capacity(skill_init.add_capacity) if skill_init.add_capacity else None,
-                           kwargs = kwargs,
-                           pain=self.check_pain())
+                           pain=self.check_pain(),
+                           buff=baff,
+                           kwargs = kwargs)
 
         if 'difficulty' in kwargs:
             c_result = c_roll.check_difficulty(kwargs.get('difficulty'))
@@ -537,7 +539,7 @@ class CharacterAttributes:
             crit_modifier = c_roll.check_critical_modifier()
 
             self.upgrade_skill(skill, c_value, crit_modifier=crit_modifier, kwargs=kwargs)
-            return c_result, c_roll.roll_characteristic(c_value)
+            return c_result, c_roll.roll_characteristic(c_value), c_roll.dice
 
         else:
             return c_roll.dice

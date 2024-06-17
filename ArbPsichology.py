@@ -14,7 +14,6 @@ class WorldView:
         self.kindness_vector = data.get('kindness', None)
         self.tolerance = data.get('tolerate', 0)
 
-
     def fetch_data(self):
         if self.data_manager.check('WORLDVIEW', f'id = "{self.id}"'):
             return self.data_manager.select_dict('WORLDVIEW', filter=f'id = "{self.id}"')[0]
@@ -54,6 +53,16 @@ class CharacterMood:
         pain = Body(self.id, data_manager=self.data_manager).calculate_total_pain()
         return -1.5 * pain
 
+    def escape_chance(self):
+        if self.mood > -80:
+            return 0
+
+        loyalty = CharacterPsychology(self.id, data_manager=self.data_manager).get_loyalty()
+        if -100 < self.mood <= -80:
+            return 60-loyalty
+        else:
+            return 100-loyalty
+
 
 class CharacterPsychology:
     def __init__(self, id:int, **kwargs):
@@ -74,3 +83,20 @@ class CharacterPsychology:
             return None
         else:
             return WorldView(self.worldview, data_manager=self.data_manager)
+
+    def get_loyalty(self):
+        current_org = self.data_manager.select_dict('CHARS_INIT', filter=f'id = {self.id}')[0].get('org', None)
+        if self.data_manager.check('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"'):
+            return self.data_manager.select_dict('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"')[0].get('loyalty')
+        else:
+            if current_org:
+                query = {
+                    'id': self.id,
+                    'rep': 0,
+                    'loyalty': 50,
+                    'org': current_org
+                }
+                self.data_manager.insert('CHARS_REPUTATION', query)
+                return 50
+            else:
+                return 0

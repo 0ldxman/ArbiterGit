@@ -4,7 +4,7 @@ from ArbCharacters import InterCharacter
 from ArbRaces import Race
 from ArbDatabase import DataManager
 from ArbHealth import LocalDisease, LocalInjury, Body
-from ArbUIUX import ArbEmbed, HealthEmbed, ErrorEmbed
+from ArbUIUX import ArbEmbed, HealthEmbed, ErrorEmbed, SuccessEmbed
 from ArbUtils.ArbDataParser import get_owners_character
 from ArbDamage import Damage
 
@@ -41,6 +41,7 @@ class AdminCommands(commands.Cog):
         return attacks_list
 
     @commands.slash_command(name="recieve_damage")
+    @commands.has_permissions(manage_channels=True)
     async def simulate_damage(self,
             ctx: discord.ApplicationContext,
             character_id: discord.Option(int),
@@ -61,6 +62,7 @@ class AdminCommands(commands.Cog):
         await ctx.respond(f'{character_id} получил {damage} ({damage_type}) в {body_part}')
 
     @commands.slash_command(name='simulate_attack')
+    @commands.has_permissions(manage_channels=True)
     async def simulate_attack(self,
                               ctx: discord.ApplicationContext,
                               character_id: discord.Option(int),
@@ -147,6 +149,18 @@ class AdminCommands(commands.Cog):
                            desc=f'{desc}')
 
         await ctx.respond('', embed=embed)
+
+    @commands.slash_command(name='execute')
+    @commands.has_permissions(administrator=True)
+    async def execute(self, ctx, command:str):
+        try:
+            exec(command)
+            embed = SuccessEmbed('Команда выполнена успешно!', f'Команда ``{command}`` была успешно выполнена!')
+            await ctx.respond(f'', embed=embed)
+
+        except Exception as e:
+            embed = ErrorEmbed('Ошибка!',f'При исполнении команды произошла ошибка ``{e}``.')
+            await ctx.respond(f'', embed=embed)
 
 def setup(bot):
     bot.add_cog(AdminCommands(bot))

@@ -67,7 +67,7 @@ class CombatManager:
         return c_attr.roll_skill(skill)
 
     def current_weapons_id(self, user_id:int, item_id:int=None) -> list:
-        c_weapons_data = self.data_manager.select_dict('CHARS_INVENTORY', filter=f'character_id = {user_id} AND slot = "Оружие"')
+        c_weapons_data = self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'id = {user_id} AND slot = "Оружие"')
 
         weapons = []
         for i in c_weapons_data:
@@ -94,7 +94,7 @@ class CombatManager:
         return c_part.choose_random_part()
 
     def has_melee_weapon(self, target_id:int):
-        c_weapons_data = self.data_manager.select_dict('CHARS_INVENTORY',filter=f'character_id = {target_id} AND slot = "Оружие"')
+        c_weapons_data = self.data_manager.select_dict('CHARS_EQUIPMENT',filter=f'id = {target_id} AND slot = "Оружие"')
 
         melee_weapons = []
         for i in c_weapons_data:
@@ -107,7 +107,6 @@ class CombatManager:
         c_damages = damages_dict
 
         random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human')) if not 'part_id' in kwargs else (LocalBodyPart(target, kwargs.get('part_id'), data_manager=self.data_manager), None)
-        print(kwargs.get('part_id', None), random_part, parent_part)
 
         total_damage = []
 
@@ -193,39 +192,39 @@ class RangeAttack:
 
         return result
 
-    def get_current_bullets(self, weapon_id:int=None):
-        from ArbItems import Item
+    def get_current_bullets(self, **kwargs):
 
         if self.check_if_npc() is None:
             return -1, None
 
-        c_weapon = weapon_id
+        c_weapon = kwargs.get('weapon_id', None)
         if c_weapon is None:
             return 0, None
 
-        if self.data_manager.check('CHARS_MAGAZINE', f'weapon_id = {c_weapon}') is None:
+        if self.data_manager.check('CHARS_EQUIPMENT', f'item_id = {c_weapon}') is None:
             return 0, None
 
-        c_bullets_id = self.data_manager.select_dict('CHARS_MAGAZINE', filter=f'weapon_id = {c_weapon}')[0].get('magazine_id', None)
+        c_bullets_id = self.data_manager.select_dict('CHARS_EQUIPMENT', filter=f'item_id = {c_weapon}')[0]
         if c_bullets_id:
-            return Item(c_bullets_id, data_manager=self.data_manager).Value, c_bullets_id
+            return c_bullets_id.get('bullets'), c_bullets_id.get('ammo_id')
 
     def get_current_ammo(self, weapon_id:int):
         from ArbAmmo import Bullet
-        from ArbWeapons import WeaponAmmo
+        from ArbItems import Item
 
-        c_bullets_id = self.get_current_bullets(weapon_id)[1]
+        c_bullets_id = self.get_current_bullets(weapon_id=weapon_id)
 
-        if c_bullets_id is None:
+        if c_bullets_id[0] == -1:
             c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO', filter=f'caliber = "{Weapon(weapon_id, data_manager=self.data_manager).Caliber}"')]
             return Bullet(random.choice(c_bullets), data_manager=self.data_manager)
         else:
-            return WeaponAmmo(weapon_id, data_manager=self.data_manager).get_ammo_type()
+            a_type = c_bullets_id[1]
+            return Bullet(a_type, data_manager=self.data_manager)
 
     def calculate_total_attacks(self, weapon_id:int=None, fire_rate:int=None):
         c_weapon = Weapon(weapon_id, data_manager=self.data_manager)
 
-        current_bullets = self.get_current_bullets(weapon_id)
+        current_bullets = self.get_current_bullets(weapon_id=weapon_id)
 
         if c_weapon.Mode == 1:
             fire_rate = 1
@@ -267,7 +266,7 @@ class RangeAttack:
             else:
                 damage_for_cover += c_damages['damage'].Damage
 
-        if total_damage and enemy_id:
+        if total_damage and enemy_id is not None:
             self.combat_manager.recive_damage(enemy_id, total_damage)
 
         c_weapon_loud = c_weapon.total_noise()
@@ -327,9 +326,9 @@ class MeleeAttack:
         else:
             e_roll = random.randint(0, 100)
 
-        c_roll = self_combat.roll_skill('ColdSteel', difficulty=e_roll)[0]
+        c_roll = self_combat.roll_skill('ColdSteel', difficulty=e_roll)
 
-        return c_roll
+        return c_roll[0]
 
     def calculate_total_attacks(self, weapon_id:int):
         c_weapon = Weapon(weapon_id, data_manager=self.data_manager)
@@ -355,12 +354,13 @@ class MeleeAttack:
 
         for attack in range(c_attacks):
             c_roll = self.check_skill_issues()
+            print('КУБИК', c_roll)
             if c_roll:
                 c_damages = c_weapon.melee_damage()
                 n_damage = self.combat_manager.calculate_total_damage(c_damages, enemy_id, penetration_bonus=c_penetration_bonus, damage_bonus=c_damage_bonus)
                 total_damage += n_damage
 
-        if total_damage and enemy_id:
+        if total_damage and enemy_id is not None:
             self.combat_manager.recive_damage(enemy_id, total_damage)
 
         c_weapon_loud = c_weapon.total_noise()
@@ -438,9 +438,10 @@ class BodyPartAttack:
         else:
             e_roll = random.randint(0, 100)
 
-        c_roll = self_combat.roll_skill('ColdSteel', difficulty=e_roll)[0]
+        c_roll = self_combat.roll_skill('ColdSteel', difficulty=e_roll)
 
-        return c_roll
+        print('РАСОВАЯ АТАКА',e_roll, c_roll)
+        return c_roll[0]
 
     def initiate(self, attack_id:str=None):
 
@@ -463,7 +464,7 @@ class BodyPartAttack:
                                                                       damage_bonus=c_damage_bonus)
                 total_damage += n_damage
 
-        if total_damage and enemy_id:
+        if total_damage and enemy_id is not None:
             self.combat_manager.recive_damage(enemy_id, total_damage)
 
         return total_damage, total_attacks
@@ -528,47 +529,18 @@ class BallisticSimulation:
         self.data_manager = kwargs.get('data_manager', DataManager())
 
     def armors_id(self) -> dict:
+        from ArbClothes import CharacterArmors
         if not self.target_id:
             return {}
-
-        if self.data_manager.check('CHARS_INVENTORY',filter=f'character_id = {self.target_id} AND slot != "Оружие"'):
-            return {}
-
-        c_equipment_data = self.data_manager.select_dict('CHARS_INVENTORY',filter=f'character_id = {self.target_id} AND slot != "Оружие"')
-        equipment = {}
-
-        for slot in c_equipment_data:
-            c_slot = slot.get('slot')
-            c_id = slot.get('item_id')
-            c_layer = Clothes(c_id).Layer
-
-            if c_slot not in equipment.keys():
-                equipment[c_slot] = {c_layer: c_id}
-            else:
-                equipment[c_slot][c_layer] = c_id
-
-        return equipment
+        else:
+            return CharacterArmors(self.target_id, data_manager=self.data_manager).armors_id()
 
     def armors_protection(self) -> dict:
+        from ArbClothes import CharacterArmors
         if not self.target_id:
             return {}
-
-        if self.data_manager.check('CHARS_INVENTORY',filter=f'character_id = {self.target_id} AND slot != "Оружие"'):
-            return {}
-
-        c_equipment_data = self.data_manager.select_dict('CHARS_INVENTORY',filter=f'character_id = {self.target_id} AND slot != "Оружие"')
-        equipment = {}
-
-        for slot in c_equipment_data:
-            c_slot = slot.get('slot')
-            c_id = slot.get('item_id')
-            c_layer = Clothes(c_id, data_manager=self.data_manager).Layer
-            if c_slot not in equipment.keys():
-                equipment[c_slot] = {c_layer: Clothes(c_id, data_manager=self.data_manager).armor_protection()}
-            else:
-                equipment[c_slot][c_layer] = Clothes(c_id, data_manager=self.data_manager).armor_protection()
-
-        return equipment
+        else:
+            return CharacterArmors(self.target_id, data_manager=self.data_manager).armors_protection()
 
     def initiate(self, c_slot:str, c_penetration: Penetration, damage: Damage, **kwargs) -> Damage | None:
         n_armors = kwargs.get('armors_protection', self.armors_protection())
