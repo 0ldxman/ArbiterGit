@@ -177,7 +177,11 @@ class Item:
         else:
             value = f' x{self.Value} шт.'
 
-        return f'{self.Name} ({self.Quality.Name}){health}{value}'
+        quality = f' ({self.Quality.Name})' if self.Quality else ''
+        material_name = f'{self.Material.Adjective} ' if self.Material else ''
+
+
+        return f'{material_name}{self.Name}{quality}{health}{value}'
 
     def __eq__(self, other):
         if isinstance(other, int):
@@ -268,6 +272,7 @@ class CharacterEquipment:
 
     def get_armors_id(self):
         from ArbClothes import CharacterArmors
+        print(CharacterArmors(self.id, data_manager=self.data_manager).armors_id())
         return CharacterArmors(self.id, data_manager=self.data_manager).armors_id()
 
     def get_weapons_id(self):
@@ -303,6 +308,11 @@ class CharacterEquipment:
 
         return max_slots-current_slots
 
+    def armors_skills(self):
+        from ArbClothes import CharacterArmors
+
+        return CharacterArmors(self.id, data_manager=self.data_manager).armors_skills()
+
     def describe(self):
         clothes_text = f''
         weapons_text = f''
@@ -312,7 +322,8 @@ class CharacterEquipment:
 
         for slot in armors:
             slot_text = f'**[ {slot} ]:**'
-            for item in armors[slot]:
+            values = armors[slot].values()
+            for item in values:
                 slot_text += f'\n- *{Item(item, data_manager=self.data_manager).__str__()}*'
             clothes_text += f'\n{slot_text}'
 

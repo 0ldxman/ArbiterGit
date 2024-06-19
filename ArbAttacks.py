@@ -103,7 +103,7 @@ class CombatManager:
 
         return melee_weapons
 
-    def calculate_total_damage(self, damages_dict: dict, target: int =None, **kwargs) -> list[dict]:
+    def calculate_total_damage(self, damages_dict: list[dict], target: int =None, **kwargs) -> list[dict]:
         c_damages = damages_dict
 
         random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human')) if not 'part_id' in kwargs else (LocalBodyPart(target, kwargs.get('part_id'), data_manager=self.data_manager), None)
@@ -257,14 +257,16 @@ class RangeAttack:
 
         for attack in range(total_attacks):
             c_damages = c_current_ammo.process_bullet()
+            print(c_damages)
             roll = self.combat_manager.check_skill(c_weapon.Class, self.attacker, difficulty=current_difficulty)
             c_roll = roll
-
-            if c_roll:
+            print('КУБИКИ', roll, current_difficulty)
+            if c_roll >= current_difficulty:
                 n_damage = self.combat_manager.calculate_total_damage(c_damages, enemy_id)
                 total_damage += n_damage
             else:
-                damage_for_cover += c_damages['damage'].Damage
+                for damage in c_damages:
+                    damage_for_cover += damage['damage'].Damage
 
         if total_damage and enemy_id is not None:
             self.combat_manager.recive_damage(enemy_id, total_damage)

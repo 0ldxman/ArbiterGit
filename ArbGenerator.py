@@ -67,7 +67,7 @@ class ItemManager:
             self.bullets = -1 if kwargs.get('inf_bullets', True) else 0
             print('БЕСК. ПАТРОНЫ', self.bullets, kwargs.get('inf_bullets'))
             self.ammo_id = kwargs.get('ammo_id', None)
-            self.inventory = kwargs.get('inventory_id', -1)
+            self.inventory = kwargs.get('inventory', -1)
 
             self.add_to_character()
 
@@ -476,6 +476,7 @@ class GenerateCharacter:
             self.data_manager.insert('CHARS_CHARS', c_query)
 
         inventory = create_inventory(f'Инвентарь {self.name}', self.id, 'Инвентарь', data_manager=self.data_manager)
+        self.data_manager.insert('CHARS_INV', {'id': self.id, 'inventory': inventory})
 
         if self.weapon:
             inf_bullets = True if not self.owner else False
@@ -487,5 +488,3 @@ class GenerateCharacter:
                 ItemManager(c_item['id'], material_tier=self.max_tier, character_id=self.id, slot=c_item.get('slot', None), endurance=c_item.get('endurance', 100), inventory=inventory)
 
         return self.__dict__
-
-pprint.pprint(GenerateCharacter().insert_data())

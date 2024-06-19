@@ -241,7 +241,32 @@ class CharacterCombatMenu(commands.Cog):
 
     @commands.slash_command(name='take_cover')
     async def __get_to_cover(self, ctx, cover_id:int=None):
-        pass
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        result = actor.move_to_object(cover_id)
+
+        if cover_id:
+            desc = f'Вы идёте некоторое время и сближаетесь с {actor.get_current_object().label} ``(id:{actor.current_object_id})``'
+        else:
+            desc = f'Вы покидаете укрытие и отходите от него на некоторое расстояние'
+
+        if result:
+            embed = SuccessEmbed('Перемещение к укрытию',
+                                 f'*{desc}*')
+        else:
+            embed = ErrorEmbed('Перемещение к укрытию',
+                               f'*У вас не хватает сил и времени чтобы двигаться на данный момент!*')
+
+        await ctx.respond('', embed=embed)
 
     @commands.slash_command(name='escape')
     async def __escape(self, ctx):
@@ -296,15 +321,131 @@ class CharacterCombatMenu(commands.Cog):
 
     @commands.slash_command(name='overwatch')
     async def __overwatch(self, ctx):
-        pass
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response = actor.get_ready()
+        if response:
+            embed = SuccessEmbed('Дозор', f'*Вы взводите своё оружие и оглядываетесь вокруг в ожидании возможной атаки*')
+        else:
+            embed = ErrorEmbed('Дозор', f'*Вы не можете подготовиться к дозору*')
+
+        await ctx.respond('', embed=embed)
 
     @commands.slash_command(name='hunt')
     async def __hunt(self, ctx, enemy_id:int=None):
-        pass
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response = actor.take_hunt(enemy_id)
+
+        if response:
+            embed = SuccessEmbed('Охота', f'*Вы взводите своё оружие и аккуратно наводитесь на противника ``{enemy_id}``, внимательно наблюдая за его действиями и выжидая удачный момент для атаки*')
+        else:
+            embed = ErrorEmbed('Охота', f'*Вы не можете взять противника ``{enemy_id}`` под контроль*')
+        await ctx.respond('', embed=embed)
 
     @commands.slash_command(name='contain')
     async def __contain(self, ctx, layer_id:int):
-        pass
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response = actor.take_contain(layer_id)
+        if response:
+            embed = SuccessEmbed('Подавление', f'*Вы открываете упорядоченный и регулярный огонь по соседнему слою ``{layer_id}``, сдерживая перемещение и действия противника*')
+        else:
+            embed = ErrorEmbed('Подавление', f'*У вас нет возможности открыть огонь на подавление по слою ``{layer_id}``*')
+
+        await ctx.respond('', embed=embed)
+    @commands.slash_command(name='fly')
+    async def __fly(self, ctx, height:int):
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response, desc = actor.fly_height(height)
+
+        if response:
+            embed = SuccessEmbed('Полет!', f'*{desc}*')
+        else:
+            embed = ErrorEmbed('Неудачная попытка взмыть в воздух', f'*{desc}*')
+
+        await ctx.respond('', embed=embed)
+
+    @commands.slash_command(name='interact')
+    async def __interact_with_object(self, ctx, enemy_id:int=None):
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response, desc = actor.interact_with_current_object(enemy_id=enemy_id)
+
+        if response:
+            embed = SuccessEmbed('Взаимодействие!', f'*{desc}*')
+        else:
+            embed = ErrorEmbed('Неудачное взаимодействие', f'*{desc}*')
+
+        await ctx.respond('', embed=embed)
+
+    @commands.slash_command(name='capture_object')
+    async def __capture_object(self, ctx):
+        user_id = ctx.author.id
+        character = get_owners_character(user_id)
+        if character is None:
+            await ctx.send(f'{ctx.author.mention}, у вас нет персонажа!')
+            return
+
+        if not self.check_if_in_battle(character):
+            await ctx.send(f'{ctx.author.mention}, Ваш персонаж не находится в состоянии боя!')
+            return
+
+        actor = Actor(character)
+        response, desc = actor.capture_object()
+
+        if response:
+            embed = SuccessEmbed('Захват позиции!', f'*{desc}*')
+        else:
+            embed = ErrorEmbed('Неудачный захват позиции', f'*{desc}*')
+
+        await ctx.respond('', embed=embed)
 
 
 def setup(bot):

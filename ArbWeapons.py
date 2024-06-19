@@ -139,7 +139,7 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
         if size <= 0:
             size = 1
 
-        range_factor = range * 0.09
+        range_factor = range * 0.165 # 0.45
 
         if horz_factor:
             range_factor *= horz_factor
@@ -148,10 +148,11 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
 
         accuracy_factor = total_modifier if total_modifier else 1
 
-        endurance_effect = (self.Endurance / 100) * self.Accuracy
+        endurance_effect = 100 - (self.Endurance / 100) * self.Accuracy
         cover_effect = cover / size
 
-        accuracy = (self.Accuracy - endurance_effect + range_factor + cover_effect + accuracy_modifier) * accuracy_factor
+        accuracy = (endurance_effect + range_factor + cover_effect + accuracy_modifier) * accuracy_factor
+        print(self.Accuracy, endurance_effect, range_factor, cover_effect, accuracy_modifier)
         accuracy = max(0, accuracy)
 
         return accuracy
@@ -169,6 +170,10 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
         else:
             c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO',filter=f'caliber = "{self.Caliber}"')]
             return Ammunition(random.choice(c_bullets), data_manager=self.data_manager)
+
+    def possible_ammo_ids(self):
+        c_bullets = [bullet.get('id') for bullet in self.data_manager.select_dict('AMMO', filter=f'caliber = "{self.Caliber}"')]
+        return c_bullets
 
     def total_noise(self):
         basic_noise = self.Noise

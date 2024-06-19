@@ -9,6 +9,7 @@ from ArbCharacters import CharacterAttributes
 from ArbHealth import Body
 from ArbSounds import InBattleSound
 from ArbAttacks import RangeAttack
+from collections import Counter
 
 
 class Weather:
@@ -75,6 +76,7 @@ class Terrain:
         self.banned_transports = data.get('banned_transport','')
         self.object_types = data.get('object_types','Природный')
         self.movement_difficulty = data.get('move_difficulty', 0)
+        self.height = data.get('height', 0) if data.get('height', 0) is not None else 0
 
     def fetch_data(self):
         if self.data_manager.check('TERRAIN_TYPE',f'id = "{self.id}"') is None:
@@ -84,6 +86,84 @@ class Terrain:
 
     def __repr__(self):
         return f'Terrain.{self.id}'
+
+
+class ObjectInteraction:
+    def __init__(self, id:str, value, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.interation_id = id
+        self.interaction_value = value
+        data = self.get_effect_data()
+        self.label = data.get('label')
+        self.desc = data.get('desc')
+
+    def get_effect_data(self):
+        if self.data_manager.check('OBJECT_EFFECTS', f'effect_id = "{self.interation_id}"'):
+            return self.data_manager.select_dict('OBJECT_EFFECTS', filter=f'effect_id = "{self.interation_id}"')[0]
+        else:
+            return None
+
+    def get_character_inventory(self, character_id:int):
+        from ArbItems import Inventory
+        return Inventory.get_inventory_by_character(character_id, data_manager=self.data_manager).id
+
+    def get_ammo_id_by_weapon(self, character_id:int):
+        from ArbItems import CharacterEquipment
+        from ArbWeapons import Weapon
+
+        weapons = CharacterEquipment(character_id, data_manager=self.data_manager).get_weapons_id()
+        total_ammo = []
+        if not weapons:
+            return []
+
+        for weapon_id in weapons:
+            total_ammo += Weapon(weapon_id, data_manager=self.data_manager).possible_ammo_ids()
+
+        return total_ammo
+
+    def get_possible_grenades(self):
+        grenades = [grenade.get('id') for grenade in self.data_manager.select_dict('AMMO', filter=f'caliber = "Граната"')]
+        return grenades
+
+    def interaction_effect(self, character_id:int, **kwargs):
+        from ArbGenerator import ItemManager
+        from ArbWeapons import RangeWeapon
+        from ArbAttacks import CombatManager
+        from ArbAmmo import Ammunition
+
+        if self.interation_id == 'HEALBAG':
+            return ItemManager('AidKit', character_id=character_id, endurance=random.randint(80, 100), inventory=self.get_character_inventory(character_id)), 'Вы достаёте из ящика комплект медикаментов'
+
+        elif self.interation_id == 'AMMOBAG':
+            possible_ammo = random.choice(self.get_ammo_id_by_weapon(character_id))
+            value = random.randint(10, 30)
+            return ItemManager(possible_ammo, character_id=character_id, endurance=random.randint(80, 100), value=value, inventory=self.get_character_inventory(character_id)), f'Вы достаёте из ящика патроны {Ammunition(possible_ammo, data_manager=self.data_manager).name} в количестве {value} шт.'
+
+        elif self.interation_id == 'WEAPON':
+            enemy_id = kwargs.get('enemy_id')
+            combat_manager = CombatManager(data_manager=self.data_manager)
+            weapon = RangeWeapon(self.interaction_value, data_manager=self.data_manager)
+            damage_list = []
+            for i in range(weapon.Attacks):
+                damage_list += weapon.range_damage()
+            total_damage = combat_manager.calculate_total_damage(damage_list, enemy_id)
+            combat_manager.recive_damage(enemy_id, total_damage)
+
+            return total_damage, f'Вы открываете огонь по противнику из {RangeWeapon(self.interaction_value).Name}!'
+
+        elif self.interation_id == 'ARMORBAG':
+            return None, 'Вы осматриваете ящик со снаряжением'
+
+        elif self.interation_id == 'REPAIRBAG':
+            return ItemManager('ToolKit', character_id=character_id, endurance=random.randint(80, 100),
+                               inventory=self.get_character_inventory(character_id)), 'Вы достаёте из ящика комплект инструментов'
+        elif self.interation_id == 'GRENADEBAG':
+            possible_ammo = random.choice(self.get_possible_grenades())
+            value = random.randint(1, 3)
+            return ItemManager(possible_ammo, character_id=character_id, endurance=random.randint(80, 100), value=value,inventory=self.get_character_inventory(character_id)), f'Вы достаёте из ящика гаранты {Ammunition(possible_ammo, data_manager=self.data_manager).name} в количестве {value} шт.'
+
+        else:
+            return None, None
 
 
 class ObjectType:
@@ -98,13 +178,25 @@ class ObjectType:
         self.protection = data.get('protection', 0)
         self.max_endurance = data.get('endurance', 0)
         self.effect_id = data.get('effect_id', None)
-
+        self.effect_value = data.get('effect_value', None)
+        self.height = data.get('height', 0) if data.get('height', 0) is not None else 0
+        self.max_uses = data.get('max_uses', 0) if data.get('max_uses') else 0
+        self.can_be_captured = data.get('can_be_captured', 0) == 1
 
     def fetch_data(self):
         if self.data_manager.check('OBJECT_TYPE',f'object_id = "{self.object_id}"') is None:
             return {}
         else:
             return self.data_manager.select_dict('OBJECT_TYPE',filter=f'object_id = "{self.object_id}"')[0]
+
+    def interaction(self, character_id:int, **kwargs):
+        enemy = kwargs.get('enemy_id')
+        interaction = ObjectInteraction(self.effect_id, self.effect_value)
+
+        return interaction.interaction_effect(character_id, enemy_id=enemy)
+
+    def get_effect_parameters(self):
+        return self.effect_id, self.effect_value
 
     def __repr__(self):
         return f'ObjectType.{self.object_id}'
@@ -124,6 +216,15 @@ class GameObject(ObjectType):
 
         self.available_slots = self.max_slots - len(self.current_characters())
 
+        self.uses = object_data.get('uses', 0) if object_data.get('uses', None) is not None else 0
+        self.current_uses = self.max_uses - self.uses if self.uses is not None else self.max_uses
+        self.captured = object_data.get('captured', None)
+
+    def count_uses(self, uses:int):
+        self.uses += uses
+        self.current_uses = max(0, self.max_uses - self.uses)
+        self.data_manager.update('BATTLE_OBJECTS', {'uses': self.uses}, filter=f'battle_id = {self.battle_id} AND object_id = {self.id}')
+
     def fetch_object_data(self):
         if self.data_manager.check('BATTLE_OBJECTS',f'battle_id = {self.battle_id} AND layer_id = {self.layer_id} AND object_id = {self.id}') is None:
             return {}
@@ -140,6 +241,15 @@ class GameObject(ObjectType):
                 id_list.append(i.get('character_id'))
             return id_list
 
+    def enemy_in_object(self, character_id:int):
+        character_team = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {character_id} AND battle_id = {self.battle_id} AND object = {self.id}')[0].get('team_id')
+        characters_in_object = self.current_characters()
+        for i in characters_in_object:
+            if self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {i} AND battle_id = {self.battle_id} AND object = {self.id}')[0].get('team_id') != character_team:
+                return True
+        else:
+            return False
+
     def recive_damage(self, amount:int):
         self.current_endurance -= amount
         if self.current_endurance <= 0:
@@ -154,6 +264,13 @@ class GameObject(ObjectType):
                 self.data_manager.update('BATTLE_CHARACTERS',{'object': None}, f'character_id = {char}')
 
         self.data_manager.delete('BATTLE_OBJECTS',f'object_id = {self.id} AND layer_id = {self.layer_id} AND battle_id = {self.battle_id}')
+
+    def get_captured(self, team_id:int):
+        if not self.can_be_captured:
+            return
+
+        self.captured = team_id
+        self.data_manager.update('BATTLE_OBJECTS', {'captured': team_id}, f'object_id = {self.id} AND battle_id = {self.battle_id}')
 
     def __repr__(self):
         return f'Object.{self.object_id} ({self.current_endurance}/{self.max_endurance}DP)'
@@ -236,6 +353,7 @@ class Layer:
         data = self.fetch_data()
         self.label = data.get('label','Неизвестная местность')
         self.terrain = Terrain(data.get('terrain_type','Field'), data_manager=self.data_manager)
+        self.height = data.get('height', 0) if data.get('height', 0) is not None else 0
 
         self.objects = self.fetch_objects()
 
@@ -250,6 +368,9 @@ class Layer:
                 response.append(LayerModification(c_type, mod.get('rounds')))
 
             return response
+
+    def total_height(self):
+        return self.height + self.terrain.height
 
     def total_visibility(self):
         c_battle = self.get_battle()
@@ -444,6 +565,10 @@ class BattleTeam(TeamRole):
         data = self.fetch_team_data()
         self.label = data.get('label', 'Неизвестная команда')
         self.role = data.get('role', None)
+        self.commander_id = data.get('commander', None)
+        self.coordinator_id = data.get('coordinator', None)
+        self.command_points = data.get('com_points', 0)
+
         super().__init__(self.role if self.role is not None else 'Participants', data_manager=self.data_manager)
 
     def fetch_team_data(self):
@@ -475,6 +600,122 @@ class BattleTeam(TeamRole):
 
     def count_participants(self):
         return self.data_manager.get_count('BATTLE_CHARACTERS','character_id',f'battle_id = {self.battle_id} AND team_id = {self.id}')
+
+    def set_commander(self, target_id:int):
+        self.data_manager.update('BATTLE_TEAMS', {'commander': target_id}, f'team_id = {self.id}')
+
+    def set_coordinator(self, target_id:int):
+        self.data_manager.update('BATTLE_TEAMS', {'coordinator': target_id}, f'team_id = {self.id}')
+
+
+@dataclass()
+class ConditionStatus:
+    is_end: bool
+    status: str
+    victory_team: int | None
+
+    def check_victory(self):
+        if not self.is_end:
+            return None, 'Не окончено'
+        else:
+            if self.status == 'Победа':
+                return True, self.victory_team
+            else:
+                return False, self.victory_team
+class BattleCondition:
+    def __init__(self, battle_id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.battle_id = battle_id
+
+        self.get_conditions()
+
+    def get_conditions(self):
+        if self.data_manager.check('BATTLE_INIT', f'id = {self.battle_id}'):
+            data = self.data_manager.select_dict('BATTLE_INIT', filter=f'id = {self.battle_id}')[0]
+            self.condition_name = data.get('battle_type') if data.get('battle_type', None) is not None else 'Ликвидация'
+            self.condition_value = data.get('type_value') if data.get('type_value', None) is not None else None
+            current_round = data.get('round', 0)
+            self.is_last_round = data.get('last_round', 0) == current_round if data.get('last_round', None) is not None else False
+        else:
+            self.condition_name = None
+            self.condition_value = None
+            self.is_last_round = None
+
+    def check_if_only_one_team(self):
+        team = []
+        characters = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id}')
+        for character in characters:
+            team.append(character.get('team_id', None))
+        if len(team) > 1:
+            return ConditionStatus(False, 'Бой Не окончен', None)
+        else:
+            return ConditionStatus(True, f'Победа {team[0]}', team[0])
+
+    def check_object_capturer(self):
+        object_id = self.condition_value
+
+        if self.data_manager.check('BATTLE_OBJECTS', filter=f'battle_id = {self.battle_id} AND object_id = {object_id}'):
+            object_data = self.data_manager.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {self.battle_id} AND object_id = {object_id}')[0]
+        else:
+            return ConditionStatus(True, f'Ничья', None)
+
+        if object_data.get('captured'):
+            return ConditionStatus(True, f'Победа', object_data.get("capturer"))
+        else:
+            return ConditionStatus(True, f'Ничья', None)
+
+    def check_team_members(self):
+        team_id = self.condition_value
+
+        if self.data_manager.check('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id} AND team_id = {team_id}'):
+            return ConditionStatus(True, 'Победа', team_id)
+        else:
+            return ConditionStatus(False, 'Поражение', team_id)
+
+    def check_if_all_members_on_last_layer(self):
+        team_id = self.condition_value
+        last_layer = max(Battlefield(self.battle_id, data_manager=self.data_manager).layers)
+
+        if not self.data_manager.check('BATTLE_CHARACTERS', f'battle_id = {self.battle_id} AND team_id = {team_id}'):
+            return ConditionStatus(True, 'Поражение', team_id)
+
+        team_data = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id} AND team_id = {team_id}')
+        for member in team_data:
+            if member.get('layer_id') != last_layer:
+                return ConditionStatus(False, 'Бой не окончен', team_id)
+        else:
+            return ConditionStatus(True, 'Победа', team_id)
+
+    def check_all_links(self):
+        links_ids = [obj for obj in self.data_manager.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {self.battle_id} AND object_type = "Link"')]
+        if links_ids < self.condition_value:
+            return ConditionStatus(True, 'Поражение', None)
+        else:
+            return ConditionStatus(True, 'Победа', None)
+
+    def check_condition(self):
+        if self.condition_name == 'Ликвидация':
+            return self.check_if_only_one_team()
+        elif self.condition_name == 'Перехват':
+            if not self.is_last_round:
+                return ConditionStatus(False, 'Бой не окончен', None)
+            else:
+                return self.check_all_links()
+
+        elif self.condition_name == 'Захват':
+            if not self.is_last_round:
+                return ConditionStatus(False, 'Бой не окончен', None)
+            else:
+                return self.check_object_capturer()
+
+        elif self.condition_name == 'Выживание':
+            if not self.is_last_round:
+                return ConditionStatus(False, 'Бой не окончен', None)
+            else:
+                return self.check_team_members()
+
+        elif self.condition_name == 'Переход':
+            return self.check_if_all_members_on_last_layer()
 
 
 class Battlefield:
@@ -644,6 +885,8 @@ class Battlefield:
 - **Текущий ход:** {self.current_turn_index()+1} из {len(self.turn_order())}
 '''
         return name, total_text
+
+
 
 
 class ActorCombat:
@@ -885,6 +1128,18 @@ class ActorCombat:
             else:
                 return False
 
+    def overwatch(self):
+        if self.data_manager.check('CHARS_COMBAT',f'id = {self.id}') is None:
+            return False
+        else:
+            c_cost = 2
+            if self.ap_cost_usage(c_cost):
+                self.clear_statuses()
+                self.data_manager.update('CHARS_COMBAT', {'ready': 1}, f'id = {self.id}')
+                return True
+            else:
+                return False
+
     def get_prepared(self):
         c_cost = 2
         if self.ap_cost_usage(c_cost):
@@ -1081,6 +1336,33 @@ class ActorCombat:
         from ArbHealth import RaceAttack
         return RaceAttack(attack_id, data_manager=self.data_manager).cost
 
+    def calculate_height_delta(self, enemy_id:int):
+        enemy = Actor(enemy_id, data_manager=self.data_manager)
+
+        actor_height = Actor(self.id, data_manager=self.data_manager).calculate_total_height()
+        enemy_height = enemy.calculate_total_height()
+
+        total_height = abs(actor_height - enemy_height)
+
+        return total_height
+
+    def calculate_total_distance(self, enemy_id:int):
+        enemy = Actor(enemy_id, data_manager=self.data_manager)
+
+        total_height = self.calculate_height_delta(enemy_id)
+        layer_distance = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
+
+        print(round(math.sqrt(total_height**2 + layer_distance**2), 2), layer_distance, total_height)
+
+        return round(math.sqrt(total_height**2 + layer_distance**2))
+
+    def calculate_total_cover(self, enemy_id:int):
+        enemy = Actor(enemy_id, data_manager=self.data_manager)
+        enemy_cover = enemy.get_current_object().protection if enemy.current_object_id else 0
+        total_height = self.calculate_height_delta(enemy_id)
+
+        return enemy_cover - total_height
+
     def range_attack(self, enemy_id:int, **kwargs):
         from ArbCharacters import Character, Race
         from ArbWeapons import Weapon
@@ -1119,10 +1401,10 @@ class ActorCombat:
             return None, 'Вы пытаетесь навестись на цель, но вас атакуют противники выцеливавшие вас всё это время'
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
-        distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
-        e_cover = enemy.get_current_object()
-        if e_cover:
-            enemy_coverage = random.randint(0, e_cover.protection) if not kwargs.get('ignore_cover', False) else 0
+        distance_to_enemy = self.calculate_total_distance(enemy_id)
+        e_cover = self.calculate_total_cover(enemy_id)
+        if e_cover >= 0:
+            enemy_coverage = random.randint(0, e_cover) if not kwargs.get('ignore_cover', False) else 0
         else:
             enemy_coverage = 0
 
@@ -1135,8 +1417,8 @@ class ActorCombat:
         total_damage, total_attacks, weapon_loudness, damage_for_cover = RangeAttack(self.id, enemy_id, enemy_attributes=enemy_attributes, data_manager=self.data_manager).initiate(c_weapon)
         #CharacterCombat(self.id, data_manager=self.data_manager).range_attack(c_weapon, enemy_id=enemy_id, enemy_distance= distance_to_enemy, enemy_cover= enemy_coverage,enemy_size= enemy_size, **kwargs)
 
-        if damage_for_cover > 0 and e_cover:
-            e_cover.recive_damage(damage_for_cover)
+        if damage_for_cover > 0 and enemy.current_object_id:
+            enemy.get_current_object().recive_damage(damage_for_cover)
 
         if total_attacks != 0:
             if c_ammo[0] != -1:
@@ -1231,20 +1513,17 @@ class ActorCombat:
             return None, 'Вы пытаетесь совершить атаку, но вас атакуют противники выцеливавшие вас всё это время'
 
         enemy = Actor(enemy_id, data_manager=self.data_manager)
-        distance_to_enemy = Actor(self.id, data_manager=self.data_manager).distance_to_layer(enemy.current_layer_id)
+        distance_to_enemy = self.calculate_total_distance(enemy_id)
+
         if RaceAttack(c_attack, data_manager=self.data_manager).range < distance_to_enemy:
             return None, 'Вы понимаете, что расстояния между вами и противником слишком велико для совершения данной атаки'
 
-        e_cover = enemy.get_current_object()
-        if e_cover:
-            enemy_coverage = e_cover.protection
-        else:
-            enemy_coverage = 0
+        e_cover = self.calculate_total_cover(enemy_id)
 
         enemy_size = Race(Character(enemy_id, data_manager=self.data_manager).Race, data_manager=self.data_manager).Size
 
         enemy_attributes = {'distance': distance_to_enemy,
-                            'cover': enemy_coverage,
+                            'cover': e_cover,
                             'size': enemy_size}
 
         total_damage, total_attacks = BodyPartAttack(self.id, enemy_id, enemy_attributes=enemy_attributes, data_manager=self.data_manager).initiate(c_attack)
@@ -1344,12 +1623,15 @@ class Actor:
         self.current_object_id = battle_data.get('object', None)
         self.team_id = battle_data.get('team_id', None)
 
+        self.height = battle_data.get('height', 0) if battle_data.get('height', 0) is not None else 0
         self.max_view_distance = self.distance_of_view()
 
         self.initiative = battle_data.get('initiative', 0)
         self.is_active = battle_data.get('is_active', None)
 
         self.actor_attributes = self.fetch_attributes()
+
+        self.height = battle_data.get('height', 0) if battle_data.get('height', 0) is not None else 0
 
     def get_max_movement(self):
         c_movement = CharacterAttributes(self.id, data_manager=self.data_manager).check_skill('Movement')
@@ -1571,7 +1853,8 @@ class Actor:
 
     def distance_of_view(self):
         c_eyes = Body(self.id, data_manager=self.data_manager).physical_stat('Зрение')/100
-        basic_view = 5400
+        height_bonus = 1 + math.sqrt(self.calculate_total_height()) / 5 if self.calculate_total_height() > 0 else 1 - math.sqrt(abs(self.calculate_total_height())) / 5
+        basic_view = 5400 * height_bonus
         c_battle = self.get_current_battle()
         if c_battle is None:
             time_factor = 1
@@ -1593,10 +1876,13 @@ class Actor:
         c_battle_layers_id = set(c_battle.layers.keys())
         c_delta = c_battle.distance_delta
 
+        current_height = self.calculate_total_height()
+
         layers_vigilance = {}
         cached_results = {}
 
         for i in reversed([i for i in c_battle_layers_id if i < c_layer_id]):
+
             if i in layers_vigilance:
                 break
 
@@ -1610,7 +1896,13 @@ class Actor:
                 cached_results[i] = vigilance
 
             if c_battle_layers[i].terrain.coverage and i != c_layer_id:
+                if current_height - c_battle_layers[i].total_height() > 10:
+                    continue
+                else:
+                    break
+            if c_battle_layers[i].total_height() - current_height >= 5:
                 break
+
 
         for i in [i for i in c_battle_layers_id if i >= c_layer_id]:
             if i in layers_vigilance:
@@ -1626,6 +1918,11 @@ class Actor:
                 cached_results[i] = vigilance
 
             if c_battle_layers[i].terrain.coverage and i != c_layer_id:
+                if current_height - c_battle_layers[i].total_height() > 10:
+                    continue
+                else:
+                    break
+            if c_battle_layers[i].total_height() - current_height >= 5:
                 break
 
         return layers_vigilance
@@ -1680,13 +1977,14 @@ class Actor:
 
         return distance
 
-    def move_to_object(self, object_id:int):
+    def move_to_object(self, object_id:int=None):
         layer_objects = self.get_current_layer().objects
-        if object_id not in layer_objects.keys():
+        if object_id not in layer_objects.keys() and object_id is not None:
             return False
 
-        if GameObject(object_id, self.current_layer_id, self.current_battle_id, data_manager=self.data_manager).available_slots <= 0:
-            return False
+        if object_id:
+            if GameObject(object_id, self.current_layer_id, self.current_battle_id, data_manager=self.data_manager).available_slots <= 0:
+                return False
 
         c_cost = round(self.movement_cost() * 0.5)
         if c_cost > self.actor_attributes.ap:
@@ -1699,7 +1997,8 @@ class Actor:
 
             self.remove_cover()
             self.actor_attributes.ap_use(c_cost)
-            self.set_cover(object_id)
+            if object_id is not None:
+                self.set_cover(object_id)
             self.make_sound('Steps', self.steps_volume())
             if self.actor_attributes.get_melee_target_from():
                 self.actor_attributes.flee_from_melee()
@@ -1767,6 +2066,7 @@ class Actor:
             if GameObject(cover_id, self.current_layer_id, self.current_battle_id, data_manager=self.data_manager).available_slots <= 0:
                 return False
             else:
+                self.current_object_id = cover_id
                 self.data_manager.update('BATTLE_CHARACTERS',{'object': cover_id}, f'character_id = {self.id}')
 
     def set_layer(self, layer_id:int):
@@ -1874,6 +2174,95 @@ class Actor:
 
     def reload(self, weapon_id:int=None, item_id:int=None):
         return self.actor_attributes.reload(weapon_id=weapon_id, item_id=item_id)
+
+    def calculate_total_height(self):
+        layer_height = self.get_current_layer().total_height() if self.current_layer_id is not None else 0
+        object_height = self.get_current_object().height if self.current_object_id is not None else 0
+        self_height = self.height
+
+        return layer_height + object_height + self_height
+
+    def set_height(self, height:int):
+        if self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {self.id}'):
+            query = {'height': self.height + height}
+            self.height = self.height + height
+            self.data_manager.update('BATTLE_CHARACTERS', query, f'character_id = {self.id}')
+
+    def fly_height(self, height:int):
+        from ArbHealth import Body
+        from ArbItems import CharacterEquipment
+
+        stats = Body(self.id, data_manager=self.data_manager).physical_stats()
+        armors_skills = CharacterEquipment(self.id, data_manager=self.data_manager).armors_skills()
+        stat_value = stats.get('Полет', 0) if 'Полет' in stats else -1
+        skill_value = armors_skills.get('Полет', 0) if 'Полет' in armors_skills else -1
+
+        if stat_value <= 0 and skill_value <= 0:
+            return False, 'Вы не можете летать'
+
+        total_value = skill_value if stat_value > stat_value else skill_value
+
+        cost = round((height // 10) * ((200 - total_value)/100))
+        print(cost)
+        if height <= 0:
+            return False, 'Вы не можете уйти под землю'
+
+        if cost <= 0 and height > 0:
+            cost = 1
+
+        if self.actor_attributes.ap < cost:
+            return False, 'У вас нет времени и сил, чтобы изменить свою высоту'
+        else:
+            self.actor_attributes.ap_use(cost)
+            self.set_height(height)
+            return True, f'Вы взмываете выше в воздух на {height}м.!'
+
+    def interact_with_current_object(self, **kwargs):
+        if not self.current_object_id:
+            return None, f'Вы не находитесь рядом с объектом, с которым можно взаимодействовать'
+
+        if self.actor_attributes.ap < 2:
+            return None, f'У вас нет сил и времени для того чтобы взаимодействовать с объектом'
+
+
+        obj = GameObject(self.current_object_id, self.current_layer_id, self.current_battle_id, data_manager=self.data_manager)
+
+        if not obj.effect_id:
+            return None, f'С этим объектом невозможно взаимодействовать'
+        elif obj.enemy_in_object(self.id):
+            return None, f'Вы не можете взаимодействовать с объектом пока рядом находится противник'
+        elif obj.current_uses <= 0:
+            self.actor_attributes.ap_use(2)
+            return None, f'С данным объектом больше нельзя взаимодействовать'
+        else:
+            self.actor_attributes.ap_use(2)
+            obj.count_uses(1)
+            return obj.interaction(self.id, enemy_id=kwargs.get('enemy_id'))
+
+    def capture_object(self):
+        if not self.current_object_id:
+            return None, f'Вы не находитесь рядом с объектом, который можно захватить'
+
+        if self.actor_attributes.ap < 2:
+            return None, f'У вас нет сил и времени для того чтобы захватить объект'
+
+        obj = GameObject(self.current_object_id, self.current_layer_id, self.current_battle_id, data_manager=self.data_manager)
+
+        print(obj.id, obj.can_be_captured)
+
+        if not obj.can_be_captured:
+            return None, f'Данный объект невозможно захватить'
+        elif obj.enemy_in_object(self.id):
+            return None, f'Вы не можете захватить объект пока рядом находится противник'
+        elif self.team_id is None:
+            return None, f'У вас нет команды, вы не можете захватывать объекты'
+        elif self.team_id == obj.captured:
+            return None, f'Данный объект уже захвачен вашей командой'
+        else:
+            self.actor_attributes.ap_use(2)
+            obj.get_captured(self.team_id)
+            return True, f'Вы успешно сближаетесь с объектом, проводите некоторые манипуляции и захватываете {obj.label}'
+
 
     def __repr__(self):
         return f'Actor[ID: {self.id}]'

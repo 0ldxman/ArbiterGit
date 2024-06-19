@@ -103,8 +103,8 @@ class ErrorEmbed(ArbEmbed):
 class HealthEmbed(ArbEmbed):
     def __init__(self, title: str=None, desc:str=None, damage:int=None, **kwargs):
         super().__init__(title, desc, **kwargs)
-        start_point = (153, 184, 152)
-        end_point = (232, 74, 95)
+        start_point = (87, 242, 135)
+        end_point = (237, 66, 69)
 
         damage = damage/100 if damage else 0
 

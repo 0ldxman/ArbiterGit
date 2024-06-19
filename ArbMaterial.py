@@ -17,6 +17,7 @@ class Material:
         self.Biom = data.get('biome', '')
         self.DisguiseFactor = data.get('disguise_factor', 1)
         self.Tier = data.get('tier', 0)
+        self.Adjective = data.get('adj', '')
 
     def fetch_data(self) -> dict:
         if self.data_manager.select_dict('MATERIALS',filter=f'id = "{self.ID}"') is None:

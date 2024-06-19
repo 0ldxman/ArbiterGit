@@ -709,7 +709,7 @@ class Body:
 
     def physical_stat(self, stat_name:str):
         stats = self.physical_stats()
-        return stats[stat_name]
+        return stats[stat_name] if stat_name in stats else 0
 
     def calculate_total_bleeding(self):
 

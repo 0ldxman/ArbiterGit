@@ -30,6 +30,8 @@ class ClothesInit:
         self.MaterialType = ''
         self.Efficiency = 0
         self.MaxEndurance = 0
+        self.Skill = None
+        self.SkillValue = 0
 
     def fill_clothes_data(self, clothes_data):
         self.Name = clothes_data.get('name', '')
@@ -43,6 +45,8 @@ class ClothesInit:
         self.MaterialType = clothes_data.get('material_type', 0)
         self.Efficiency = clothes_data.get('efficiency', 0)
         self.MaxEndurance = clothes_data.get('endurance', 0)
+        self.Skill = clothes_data.get('skill', None)
+        self.SkillValue = clothes_data.get('value', 0)
 
 
 @dataclass()
@@ -160,6 +164,9 @@ class Clothes(Item, ClothesInit):
     def cloth_disguise(self):
         return self.Disguise * self.Material.DisguiseFactor * self.get_current_endurance()
 
+    def cloth_skill(self):
+        return self.Skill, self.SkillValue * self.get_current_endurance()
+
     def __str__(self):
         return f'{self.Name} из {self.Material.Name} ({self.Quality.Name})'
 
@@ -211,5 +218,18 @@ class CharacterArmors:
 
         return equipment
 
+    def armors_skills(self) -> dict:
+        items = self.armors_id()
+        skills = {}
+        for item in items:
+            cloth = Clothes(item, data_manager=self.data_manager)
+            skill, skill_value = cloth.cloth_skill()
+            if skill and skill_value:
+                if skill not in skills:
+                    skills[skill] = skill_value
+                else:
+                    skills[skill] += skill_value
+
+        return skills
 
 

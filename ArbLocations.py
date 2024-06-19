@@ -12,11 +12,12 @@ from collections import defaultdict
 
 @dataclass()
 class Trail:
-    trail_id: int
-    start_loc_id: int
-    end_loc_id: int
+    trail_id: str
+    label: str
+    start_loc_id: str
+    end_loc_id: str
     movement_cost: int
-    movement_type: str
+    movement_type: list
     requirement: dict
 
     @classmethod
@@ -25,19 +26,33 @@ class Trail:
         visited_locations = []
 
         # ProTip: Собираем все маршруты, начинающиеся в данной локации
-        trails = data_manager.select_dict('LOCATION_TRAILS', filter=f'first_loc = {location_id}')
+        trails = data_manager.select_dict('LOCATION_TRAILS', filter=f'first_loc = "{location_id}"')
         for trail in trails:
-            current_trail = Trail(trail.get('trail_id'), trail.get('first_loc'), trail.get('second_loc'),trail.get('move_cost'), trail.get('move_type'), trail.get('requirement'))
+            movement_types = trail.get('move_type')
+            if movement_types is not None:
+                movement_types = "".join(movement_types.split())
+                movement_types = list(movement_types.split(','))
+
+            print(movement_types)
+
+            current_trail = Trail(trail.get('trail_id'), trail.get('label'), trail.get('first_loc'), trail.get('second_loc'),trail.get('move_cost'), movement_types, trail.get('requirement'))
             visited_locations.append(trail.get('second_loc'))
             total_trails.append(current_trail)
 
         # А теперь собираем обратные маршруты, ведущие в данную локацию
-        reversed_trails = data_manager.select_dict('LOCATION_TRAILS', filter=f'second_loc = {location_id}')
+        reversed_trails = data_manager.select_dict('LOCATION_TRAILS', filter=f'second_loc = "{location_id}"')
         for trail in reversed_trails:
             if trail.get('first_loc') in visited_locations:
                 continue
             else:
-                current_trail = Trail(trail.get('trail_id'), trail.get('first_loc'), trail.get('second_loc'),trail.get('move_cost'), trail.get('move_type'), trail.get('requirement'))
+                movement_types = trail.get('move_type')
+                if movement_types is not None:
+                    movement_types = "".join(movement_types.split())
+                    movement_types = list(movement_types.split(','))
+
+                print(movement_types)
+
+                current_trail = Trail(trail.get('trail_id'), trail.get('label'), trail.get('first_loc'), trail.get('second_loc'),trail.get('move_cost'), movement_types, trail.get('requirement'))
                 visited_locations.append(trail.get('first_loc'))
                 total_trails.append(current_trail)
 
@@ -45,25 +60,34 @@ class Trail:
 
     @classmethod
     def get_trail_for_edge(cls, from_loc, to_loc, data_manager):
-        trail = data_manager.select_dict('LOCATION_TRAILS', filter=f'first_loc={from_loc} and second_loc={to_loc}')
+        trail = data_manager.select_dict('LOCATION_TRAILS', filter=f'first_loc="{from_loc}" and second_loc="{to_loc}"')
         if not trail:
             trail = data_manager.select_dict('LOCATION_TRAILS',
-                                                  filter=f'first_loc={to_loc} AND second_loc={from_loc}')
+                                                  filter=f'first_loc="{to_loc}" AND second_loc="{from_loc}"')
 
         if trail:
-            return Trail(trail[0]['trail_id'], trail[0]['first_loc'], trail[0]['second_loc'],
-                         trail[0]['move_cost'], trail[0]['move_type'], trail[0]['requirement'])
+            movement_types = trail[0]['move_type']
+            if movement_types is not None:
+                movement_types = "".join(movement_types.split())
+                movement_types = list(movement_types.split(','))
+
+            return Trail(trail[0]['trail_id'],trail[0]['label'], trail[0]['first_loc'], trail[0]['second_loc'],
+                         trail[0]['move_cost'], movement_types, trail[0]['requirement'])
         return None
 
     def __str__(self):
-        return f'Маршрут {specnum(self.trail_id).roman_number} ({self.trail_id}): {self.start_loc_id}-{self.end_loc_id}'
+        return f'Маршрут "{self.label}": {self.start_loc_id}-{self.end_loc_id}'
+
+    def __repr__(self):
+        return f'Trail.{self.trail_id}(Cost: {self.movement_cost}, types: {self.movement_type})'
 
 
 class GraphBuilder:
-    def __init__(self, data_manager, start_location:int):
+    def __init__(self, data_manager, start_location:str):
         self.data_manager = data_manager
         self.graph = defaultdict(list)
         self.build_graph(start_location)
+
     def build_graph(self, location_id):
         self._build_graph_recursive(location_id, set())  # Авамер
 
@@ -110,7 +134,7 @@ class GraphBuilder:
 
 
 class ShortestPathFinder:
-    def __init__(self, start_location:int, end_location:int, **kwargs):
+    def __init__(self, start_location:str, end_location:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.graph = GraphBuilder(self.data_manager, start_location).graph
         self.start_loc = start_location
@@ -150,20 +174,20 @@ class ShortestPathFinder:
 
 
 class Region:
-    def __init__(self, id:int, **kwargs):
+    def __init__(self, id:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = id
 
         data = self.fetch_data()
         self.label = data.get('label', 'Неизвестный регион')
         self.parent_id = data.get('parent_id', None)
-        self.hub_location_id = data.get('hub_id', -1)
+        self.hub_location_id = data.get('hub_id', None)
         self.hub_movement_cost = data.get('hub_movement_cost', 1)
         self.region_movement_cost = data.get('region_movement_cost', 1)
 
     def fetch_data(self):
-        if self.data_manager.check('REGIONS',f'id = {self.id}'):
-            return self.data_manager.select_dict('REGIONS', filter=f'id = {self.id}')[0]
+        if self.data_manager.check('LOCATION_REGIONS',f'id = "{self.id}"'):
+            return self.data_manager.select_dict('LOCATION_REGIONS', filter=f'id = "{self.id}"')[0]
         else:
             return {}
 
@@ -171,7 +195,7 @@ class Region:
         locations_in_region = []
         # здесь нужно ваше собственное получение локаций, например, из базы данных
         # предположим, что вы храните информацию о локациях в базе данных с таблицей LOCATION
-        location_data = self.data_manager.select_dict('LOCATION_INIT', filter=f'region = {self.id}')
+        location_data = self.data_manager.select_dict('LOCATION_INIT', filter=f'region = "{self.id}"')
 
         for location_item in location_data:
             location = Location(id=location_item['id'], data_manager=self.data_manager)
@@ -179,21 +203,33 @@ class Region:
 
         return locations_in_region
 
+    def get_hub_location(self):
+        if self.hub_location_id:
+            return Location(self.hub_location_id, data_manager=self.data_manager)
+        else:
+            return None
+
+
 class Location:
-    def __init__(self, id:int, **kwargs):
+    def __init__(self, id:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = id
 
         data = self.fetch_data()
         self.label = data.get('label', 'Неизвестная локация')
         self.type = data.get('type', None)
-        self.region = data.get('region', -1)
+        self.region = data.get('region', None)
         self.org_id = data.get('org_id', None)
 
+    def get_region(self):
+        if self.region:
+            return Region(self.region, data_manager=self.data_manager)
+        else:
+            return None
 
     def fetch_data(self):
-        if self.data_manager.check('LOCATION_INIT',f'id = {self.id}'):
-            return self.data_manager.select_dict('LOCATION_INIT',filter=f'id = {self.id}')[0]
+        if self.data_manager.check('LOCATION_INIT',f'id = "{self.id}"'):
+            return self.data_manager.select_dict('LOCATION_INIT',filter=f'id = "{self.id}"')[0]
         else:
             return {}
 
@@ -201,4 +237,4 @@ class Location:
         return Trail.fetch_trails_by_location(self.id, data_manager=self.data_manager)
 
     def __repr__(self):
-        return f'Location({self.id} {self.label})'
+        return f'Location(id={self.id}, label="{self.label}")'
