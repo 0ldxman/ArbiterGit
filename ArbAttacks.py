@@ -106,11 +106,11 @@ class CombatManager:
     def calculate_total_damage(self, damages_dict: list[dict], target: int =None, **kwargs) -> list[dict]:
         c_damages = damages_dict
 
-        random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human')) if not 'part_id' in kwargs else (LocalBodyPart(target, kwargs.get('part_id'), data_manager=self.data_manager), None)
-
         total_damage = []
 
         for damage in c_damages:
+            random_part, parent_part = self.select_random_part(enemy_id=target, enemy_race=kwargs.get('race', 'Human')) if not 'part_id' in kwargs else (LocalBodyPart(target, kwargs.get('part_id'), data_manager=self.data_manager), None)
+
             damage_bonus = kwargs.get('damage_bonus', 0) if kwargs.get('damage_bonus', None) is not None else 0
             damage_crit = kwargs.get('crit_damage', 1) if kwargs.get('crit_damage', None) is not None else 1
             penetration_bonus = kwargs.get('penetration_bonus', 0) if kwargs.get('penetration_bonus', None) is not None else 0

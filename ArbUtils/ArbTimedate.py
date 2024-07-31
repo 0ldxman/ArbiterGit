@@ -30,8 +30,24 @@ class TimeManager:
     def current_time(self):
         return self.time.now().format('HH:mm')
 
+    def get_string_timestamp(self, date: str):
+        last_date = self.get_date(date)
+        spended_days = self.today() - last_date
+
+        if spended_days.days == 0:
+            return 'Сегодня'
+        elif spended_days.days == 1:
+            return 'Вчера'
+        elif spended_days.days == 2:
+            return 'Позавчера'
+        elif spended_days.days > 2:
+            return f'{spended_days.days} дней назад'
+        elif spended_days.days < 0:
+            return f'через {spended_days.days} дней'
+
+
     def get_date(self, date:str):
-        return self.time.get(date, 'YYYY-MM-DD')
+        return self.time.get(date, 'YYYY-MM-DD').date()
 
     def get_time(self, time:str):
         return self.time.get(time, 'HH:mm')
@@ -102,6 +118,20 @@ class TimeManager:
             }
 
             return arrow.get(**datetime_args)
+
+    def get_current_time_condition(self):
+        now = self.current_time()
+        hours, minutes = now.split(':')
+        hours = int(hours)
+
+        if 4 <= hours < 10:
+            return 'Morning'
+        elif 10 <= hours < 16:
+            return 'Day'
+        elif 16 <= hours < 22:
+            return 'Evening'
+        else:
+            return 'Night'
 
 
 class TaskManager(TimeManager):

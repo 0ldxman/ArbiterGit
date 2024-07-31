@@ -282,14 +282,14 @@ class Relationship:
         return total_attributes
 
     def __repr__(self):
-        from ArbCharacters import InterCharacter
+        from ArbCharacters import Character
         if self.relation_of_actor is None:
-            pass
+            return ''
         else:
             trust, sympathy, respect, love, label = self.get_relation_of_actor()
             s_trust, s_sympathy, s_respect, s_love, s_label = self.get_relation_to_actor()
 
-            return f"""[ {label} ] **{InterCharacter(self.subject).name}** {sympathy:+} ({s_sympathy:+})"""
+            return f"""-# - {label} **{Character(self.subject).name}** {sympathy:+} ({s_sympathy:+})"""
             #> Доверие: {trust:+} ({s_trust:+})
             #> Уважение: {respect:+} ({s_respect:+})
             #> Влечение: {love:+} ({s_love:+})\n\n
@@ -367,4 +367,10 @@ class CharacterRelations:
 
         return relationships
 
+    def string_relations(self):
+        relations_str = ''
+        for rel in self.relationships.values():
+            if rel.__repr__():
+                relations_str += rel.__repr__() + '\n'
 
+        return relations_str

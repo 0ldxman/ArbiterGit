@@ -11,7 +11,7 @@ class ListChunker:
     self.input_list = input_list
     self.chunks = self.chunk(self.input_list)
 
-    def __repr__(self):
+  def __repr__(self):
       return f"ListChunker(items_per_chunk={self.items_per_chunk})"
 
   def __str__(self):
@@ -58,3 +58,20 @@ class ListChunker:
   def is_chunkable(self, input_list):
     """Проверяет, можно ли разбить список на подсписки"""
     return len(input_list) >= self.items_per_chunk
+
+def process_string(input_string):
+  # Разделить строку по запятой
+  words = input_string.split(',')
+  # Удалить пробелы и сделать каждое слово с заглавной буквы
+  processed_words = [word.strip().title() for word in words]
+  return processed_words
+
+
+def string_to_list(input_string, delimiter=','):
+    # Разбиваем строку по заданному разделителю
+    elements = input_string.split(delimiter)
+
+    # Удаляем лишние пробелы в каждом элементе
+    cleaned_elements = [element.strip().title() for element in elements]
+
+    return cleaned_elements

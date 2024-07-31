@@ -292,3 +292,36 @@ class TargetRoll:
 
     def __ge__(self, other):
         return self.roll >= other.roll
+
+
+class RollCheck:
+    def __init__(self, sides: int, modifiers: tuple[float] = None):
+        self.sides = sides
+        self.modifiers = modifiers if modifiers else []
+        self.result = self.roll()
+
+        self.is_critical = self.check_critical_success()
+        self.crit_modifier = self.check_critical_modifier()
+
+    def roll(self) -> int:
+        c_roll = random.randint(1, self.sides)
+        for modifier in self.modifiers:
+            c_roll *= modifier if modifier is not None else 1
+
+        return int(round(c_roll))
+
+    def check_critical_success(self) -> bool:
+        return self.result >= self.sides * 0.9
+
+    def check_critical_failure(self) -> bool:
+        return self.result <= self.sides * 0.1
+
+    def check_critical_modifier(self):
+        crit_barrier = self.sides * 0.9
+        return 1 + (10 * (self.result - crit_barrier) / self.result) if self.result > crit_barrier else 1
+
+    def __repr__(self):
+        return f'SkillCheck({self.sides}, result={self.result})'
+
+    def __str__(self):
+        return f'Кубик d{self.sides}\nВыпало: {self.result} {f"(Критический успех!)" if self.is_critical else ""}'

@@ -1,33 +1,28 @@
-from ArbDatabase import DataManager
+from ArbDatabase import DataManager, DataModel
 
 
-class Material:
+class Material(DataModel):
     def __init__(self, id: str, **kwargs):
-        self.ID = id
+        self.material_id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
 
-        data = self.fetch_data()
-        self.Name = data.get('name','')
-        self.Type = data.get('type', '')
-        self.MarketValue = data.get('market_value', 0)
-        self.InsulationCold = data.get('insulation_cold', 0)
-        self.InsulationHeat = data.get('insulation_heat', 0)
-        self.WeaponFactor = data.get('weapon_factor', 0)
-        self.Rare = data.get('rarity', False)
-        self.Biom = data.get('biome', '')
-        self.DisguiseFactor = data.get('disguise_factor', 1)
-        self.Tier = data.get('tier', 0)
-        self.Adjective = data.get('adj', '')
+        super().__init__('MATERIALS', f'id = "{self.material_id}"', data_manager=self.data_manager)
 
-    def fetch_data(self) -> dict:
-        if self.data_manager.select_dict('MATERIALS',filter=f'id = "{self.ID}"') is None:
-            return {}
-        else:
-            return self.data_manager.select_dict('MATERIALS', filter=f'id = "{self.ID}"')[0]
+        self.label = self.get('name','')
+        self.type = self.get('type', '')
+        self.market_value = self.get('market_value', 0)
+        self.insulation_cold = self.get('insulation_cold', 0)
+        self.insulation_heat = self.get('insulation_heat', 0)
+        self.weapon_factor = self.get('weapon_factor', 0)
+        self.rarity = self.get('rarity', False)
+        self.biom = self.get('biome', '')
+        self.disguise_factor = self.get('disguise_factor', 1)
+        self.tier = self.get('tier', 0)
+        self.adjective = self.get('adj', '')
 
     def protection_data(self) -> dict:
         protection_data = {}
-        rows = self.data_manager.select_dict('MATERIALS_PROTECTION', filter=f'material_id = "{self.ID}"')
+        rows = self.data_manager.select_dict('MATERIALS_PROTECTION', filter=f'material_id = "{self.material_id}"')
         for row in rows:
             protection_id = row['protection_id']
             value = row['value']
@@ -36,7 +31,7 @@ class Material:
         return protection_data
 
     def __repr__(self):
-        return f'Material.{self.ID}'
+        return f'Material.{self.material_id}'
 
     def __str__(self):
-        return self.Name
+        return self.label
