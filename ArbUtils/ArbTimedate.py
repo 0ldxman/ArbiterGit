@@ -54,7 +54,7 @@ class TimeManager:
 
     def date_after(self, years: int = 0, months: int = 0, days: int = 0, date: str = None):
         if date:
-            return self.time.now('local').shift(years=years, months=months, days=days).to('local').date()
+            return self.time.get(date, 'YYYY-MM-DD').shift(years=years, months=months, days=days).date()
         else:
             return self.time.now('local').shift(years=years, months=months, days=days).to('local').date()
 
@@ -132,6 +132,7 @@ class TimeManager:
             return 'Evening'
         else:
             return 'Night'
+
 
 
 class TaskManager(TimeManager):

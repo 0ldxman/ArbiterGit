@@ -170,6 +170,8 @@ class DataManager:
         if filter:
             query += f" WHERE {filter}"
 
+        print(query)
+
         self.cursor.execute(query)
         self.connection.commit()
 
@@ -348,6 +350,7 @@ class DataModel:
 
     def update_record(self, data: Dict[str, Any]):
         """Update the record in the database and the local cache."""
+
         self.data_manager.update(self._table_name, data, self._key_filter)
         self.refresh_data()
 

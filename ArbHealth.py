@@ -53,7 +53,9 @@ class InjuryType(DataModel):
         self.pain_per_severity = self.get('pain_per_severity', 0)
         self.scar_pain_per_severity = self.get('scar_pain_factor', 0)
         self.bleeding = self.get('bleeding', 0) if self.get('bleeding', None) is not None else 0
+        self.treatment = self.get('treatment_per_cycle', 0) if self.get('treatment_per_cycle', None) is not None else 0
         self.infection_chance = self.get('infection_chance', 0)
+        self.scar_chance = self.get('scar_chance', 0)
         self.scar_label = self.get('scar_label', 'Неизвестный шрам')
 
     def destroyed_label(self):
@@ -108,6 +110,53 @@ class Injury(DataModel):
         else:
             return BodyElement(self.character_id, self.place, data_manager=self.data_manager)
 
+    def set_healing(self, value: float):
+        self.healing_efficiency = value
+        self.update_record({'heal_efficiency': self.healing_efficiency})
+
+    def change_healing(self, value: float):
+        new_healing = self.healing_efficiency + value
+        self.set_healing(new_healing)
+
+    def set_damage(self, value: float):
+        self.damage = value
+        self.update_record({'damage': self.damage})
+
+    def change_damage(self, value: float):
+        new_damage = self.damage + value
+        self.set_damage(new_damage)
+
+    def get_healing_bonus(self):
+        healing_bonus = 0.5 + self.healing_efficiency * 0.01
+        return healing_bonus
+
+    def roll_infection(self):
+        infection_chance = self.injury_type.infection_chance
+        healing = 150 - self.get_healing_bonus()
+
+        if self.is_scar:
+            return
+
+        if random.randint(1, 100) <= int(healing * infection_chance):
+            if not self.data_manager.check('CHARS_DISEASE', filter=f'id = {self.character_id} AND place = "{self.place}" AND type = "Infection"'):
+                Disease.create_character_disease(self.character_id, 'Infection', data_manager=self.data_manager, place=self.place)
+
+    def roll_scare(self):
+        if random.randint(1, 100) <= int(self.injury_type.scar_chance):
+            self.is_scar = True
+            self.update_record({'is_scar': 1})
+
+    def update(self):
+        damage_recovery_speed = self.injury_type.treatment * self.get_healing_bonus()
+
+        self.roll_scare()
+        self.roll_infection()
+
+        self.change_damage(-1 * damage_recovery_speed)
+
+        if self.damage <= 0:
+            self.delete_record()
+
     def __repr__(self):
         return f'Injury.{self.injury_id} ({self.injury_type.injury_type_id})'
 
@@ -154,7 +203,7 @@ class Disease(DataModel):
         self.place = self.get('place') if self.get('place', None) is not None else 'Все тело'
         self.current_severity = self.get('severity', 0)
         self.current_immunity = self.get('immunity', 0)
-        self.healing_efficiency = self.get('heal_efficiency', 0)
+        self.healing_efficiency = self.get('healing', 0) if self.get('healing', None) is not None else 0
 
         self.disease_type = DiseaseType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
 
@@ -202,11 +251,33 @@ class Disease(DataModel):
 
     def add_immunity(self, immunity: float):
         self.current_immunity += immunity
-        self.update_record({'immunity': self.current_severity})
+        self.update_record({'immunity': self.current_immunity})
 
     def add_healing(self, healing: float):
         self.healing_efficiency += healing
         self.update_record({'healing': self.healing_efficiency})
+
+    def get_healing_bonus(self):
+        healing_bonus = 0.5 + self.healing_efficiency * 0.01
+        return healing_bonus
+
+    def update(self):
+        treatment = self.disease_type.treatment_per_cycle * self.get_healing_bonus()
+
+        if self.current_severity >= 100:
+            return
+
+        self.add_immunity(self.disease_type.immunity_per_cycle * self.get_healing_bonus())
+
+        if self.current_immunity >= 100:
+            self.add_severity(-1 * treatment)
+            if self.current_severity > 100:
+                self.add_severity(-1 * (self.current_severity - 100))
+
+            if self.current_severity <= 0:
+                self.delete_record()
+        else:
+            self.add_severity(self.disease_type.severity_per_cycle)
 
     def get_body_element(self):
         if not self.place:
@@ -854,6 +925,28 @@ class Body:
         diseases_vital = self.diseases_vital_offset()
 
         return min(elements_vital, capacities_vital, diseases_vital)
+
+    def get_injuries_list(self) -> list:
+        injuries_dict = self.fetch_all_injuries()
+        injuries = [item for sublist in injuries_dict.values() for item in sublist]
+        return injuries
+
+    def get_diseases_list(self) -> list:
+        diseases_dict = self.fetch_all_diseases()
+        diseases = [item for sublist in diseases_dict.values() for item in sublist]
+        return diseases
+
+    def rest(self):
+        injuries: list[Injury] = self.get_injuries_list()
+        diseases: list[Disease] = self.get_diseases_list()
+
+        for disease in diseases:
+            disease.update()
+
+        for injury in injuries:
+            injury.update()
+
+
 
 # class BodyPart:
 #  def __init__(self, part_id: str, *, data_manager:DataManager=None):

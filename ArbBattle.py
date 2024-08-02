@@ -198,8 +198,14 @@ class ObjectType(DataModel):
         self.max_uses = self.get('max_uses', 0) if self.get('max_uses') else 0
         self.can_be_captured = self.get('can_be_captured', 0) == 1
 
+        self.wp_per_use = self.get('wp_per_use', 0) if self.get('wp_per_use', None) is not None else 0
+        self.wp_per_round = self.get('wp_per_round', 0) if self.get('wp_per_round', None) is not None else 0
+
     def interact(self, character_id:int, **kwargs):
         enemy = kwargs.get('enemy_id')
+        actor_team = BattleTeam.get_actor_team(character_id, data_manager=self.data_manager)
+        if actor_team and self.wp_per_use:
+            actor_team.add_win_points(self.wp_per_use)
 
         if self.effect_id == 'SpawnItem':
             return ItemSpawner().interact(character_id, item_type=self.effect_value, data_manager=self.data_manager)
@@ -307,6 +313,14 @@ class GameObject(DataModel):
 
         self.data_manager.update('BATTLE_OBJECTS', prompt, f'object_id = {self.id}')
 
+    def process_captured(self):
+        if not self.captured:
+            return
+
+        captured_team = BattleTeam(self.captured, data_manager=self.data_manager)
+        if self.object_type.wp_per_round:
+            captured_team.add_win_points(self.object_type.wp_per_round)
+
     def __repr__(self):
         return f'Object.{self.id}.{self.object_type.object_id} ({self.current_endurance}/{self.object_type.max_endurance}DP)'
 
@@ -339,6 +353,50 @@ class BattleTeam(DataModel):
         self.coordinator_id = self.get('coordinator', None)
         self.command_points = self.get('com_points', 0)
         self.is_active = self.get('round_activity')
+        self.winpoints = self.get('win_points', 0) if self.get('win_points', None) is not None else 0
+
+    @classmethod
+    def get_actor_team(cls, actor_id:int, **kwargs):
+        """
+               Возвращает объект команды персонажа.
+
+               :param actor_id: Идентификатор актора, чью команду мы ищем.
+               :param kwargs: Дополнительные ключевые параметры, ожидается 'data_manager' для ручного назначения DataManager.
+               :return: BattleTeam если команда найдена, None если не найдена.
+               """
+
+        db = kwargs.get('data_manager', DataManager())
+        team = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
+        dead_team = db.select_dict('BATTLE_DEAD', filter=f'character_id = {actor_id}')
+        if team:
+            return BattleTeam(team[0].get('team_id'), data_manager=db)
+        elif dead_team:
+            return BattleTeam(dead_team[0].get('team_id'), data_manager=db)
+        else:
+            return None
+
+    def add_win_points(self, wp:int):
+        """
+                       Добавляет очки победы для команды.
+
+                       :param wp: Количество добавленных очков победы.
+                       """
+
+        self.winpoints += wp
+        self.data_manager.update('BATTLE_TEAMS', {'win_points': self.winpoints}, f'team_id = {self.id}')
+
+    def reduce_win_points(self, wp:int):
+        """
+                               Снижает очки победы для команды.
+
+                               :param wp: Количество сниженных очков победы. Если итоговый self.winpoints окажется меньше 0, то присваивается значение 0.
+                               """
+
+        self.winpoints -= wp
+        if self.winpoints < 0:
+            self.winpoints = 0
+
+        self.data_manager.update('BATTLE_TEAMS', {'win_points': self.winpoints}, f'team_id = {self.id}')
 
     def add_actor(self, actor_id:int, **kwargs) -> None:
         if self.data_manager.check('BATTLE_CHARACTERS',f'character_id = {actor_id}'):
@@ -366,8 +424,14 @@ class BattleTeam(DataModel):
         return self.data_manager.get_count('BATTLE_CHARACTERS','character_id',f'team_id = {self.id} AND battle_id = {self.battle_id}')
 
     def fetch_members(self) -> list[int]:
-        if self.data_manager.check('BATTLE_CHARACTERS', f'team_id = {self.id}'):
-            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id}')]
+        if self.data_manager.check('BATTLE_CHARACTERS', f'team_id = {self.id} AND battle_id = {self.battle_id}'):
+            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id} AND battle_id = {self.battle_id}')]
+        else:
+            return []
+
+    def get_dead_members(self) -> list[int]:
+        if self.data_manager.check('BATTLE_DEAD', f'team_id = {self.id} AND battle_id = {self.battle_id}'):
+            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id} AND battle_id = {self.battle_id}')]
         else:
             return []
 
@@ -396,6 +460,21 @@ class BattleTeam(DataModel):
 
     def set_com_points(self, com_points:int) -> None:
         self.data_manager.update('BATTLE_TEAMS', {'com_points': com_points}, f'team_id = {self.id}')
+
+    def count_casulties(self):
+        if self.data_manager.check('BATTLE_DEAD', f'team_id = {self.id}'):
+            return self.data_manager.get_count('BATTLE_DEAD', 'character_id', f'team_id = {self.id} AND battle_id = {self.id}')
+        else:
+            return 0
+
+    def compare_casualties(self):
+        dead = self.count_casulties()
+        participants = self.count_participants()
+
+        total_value = dead + participants
+
+        return round(dead / total_value, 2)
+
 
 
 class Coordinator(DataModel):
@@ -694,103 +773,247 @@ class Coordinator(DataModel):
 
 
 class BattleType(ABC):
-    def __init__(self, battle: 'Battlefield'):
-        self.battle = battle
+    def __init__(self, battlefield: 'Battlefield', **kwargs):
+        self.battle = battlefield
+        self.data_manager = kwargs.get('data_manager', DataManager())
 
-    def is_last_round(self):
-        return self.battle.last_round == self.battle.round
-
-    def get_condition_value(self):
+    def get_target(self):
         return self.battle.type_value
 
-    def only_one_team(self):
-        actors = self.battle.fetch_actors()
-        teams = []
+    def set_overkill(self):
+        self.battle.set_battle_type('Overkill')
+        self.battle.set_battle_type_target(None)
 
-        for actor in actors:
-            team_id = Actor(actor, data_manager=self.battle.data_manager)
-            if team_id not in teams:
-                teams.append(team_id)
+    def add_extra_rounds(self, extra_rounds:int = 3):
+        if self.battle.last_round:
+            self.battle.set_last_round(self.battle.last_round + extra_rounds)
+        else:
+            self.battle.set_last_round(self.battle.round + extra_rounds)
 
+    def get_active_teams(self) -> list[int]:
+        actors_teams = [team.get('team_id') for team in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle.battle_id}')]
+        actors_teams = list(set(actors_teams))
+        if None in actors_teams:
+            actors_teams.remove(None)
+        return actors_teams
+
+    def get_teams_members_count(self) -> dict[int, int]:
+        team_members_count = {}
+        for team in self.get_active_teams():
+            team_members_count[team] = len(self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {team} AND battle_id = {self.battle.battle_id}'))
+        return team_members_count
+
+    def get_teams_winpoints(self) -> dict[int, float]:
+        teams = self.get_active_teams()
+        team_winpoints = {}
+        for team in teams:
+            team_winpoints[team] = BattleTeam(team, data_manager=self.data_manager).winpoints
+        return team_winpoints
+
+    def get_teams_roles(self) -> dict[int, str]:
+        teams = self.get_active_teams()
+        team_roles = {}
+        for team in teams:
+            team_roles[team] = BattleTeam(team, data_manager=self.data_manager).role.role_id
+        return team_roles
+
+    def single_team_check(self) -> bool:
+        teams = self.get_active_teams()
         if len(teams) > 1:
             return False
-
         else:
-            return teams[0]
+            return True
+
+    def last_round_check(self) -> bool:
+        if not self.battle.last_round:
+            return False
+
+        if self.battle.round >= self.battle.last_round:
+            return True
+        else:
+            return False
+
+    def get_attackers(self):
+        teams_roles = self.get_teams_roles()
+        attackers = []
+        for team, role in teams_roles.items():
+            if role == 'Attackers':
+                attackers.append(team)
+
+        return attackers
+
+    def get_defenders(self):
+        teams_roles = self.get_teams_roles()
+        defenders = []
+        for team, role in teams_roles.items():
+            if role == 'Defenders':
+                defenders.append(team)
+
+        return defenders
 
     @abstractmethod
-    def check_final_condition(self):
+    def check_battle_end(self) -> bool:
+        pass
+
+    @abstractmethod
+    def find_winner(self) -> int:
         pass
 
 
-class OverkillBattle(BattleType):
+class Overkill(BattleType):
 
-    def check_final_condition(self):
-        only_one_team = self.only_one_team()
-        if only_one_team:
-            return only_one_team
-        elif only_one_team is None:
+    def check_battle_end(self) -> bool:
+        if self.single_team_check():
+            return True
+
+        if not self.last_round_check():
+            return False
+        else:
+            winner_team = self.find_winner()
+            if winner_team:
+                return True
+            else:
+                self.add_extra_rounds(3)
+                return False
+
+    def find_winner(self) -> list[int] | None:
+        members = self.get_teams_members_count()
+        max_members = 0
+
+        for team in members:
+            if members[team] > max_members:
+                max_members = members[team]
+
+        max_count_teams_count = 0
+        for team in members:
+            if members[team] == max_members:
+                max_count_teams_count += 1
+
+        if max_count_teams_count == 1:
+            for team in members:
+                if members[team] == max_members:
+                    return [team]
+        else:
             return None
+
+
+class Elimination(BattleType):
+    def check_target_elimination(self) -> bool:
+        target_id = self.get_target()
+        is_target_dead = Body(target_id, data_manager=self.data_manager).is_dead()[0]
+        if is_target_dead:
+            return True
         else:
             return False
 
+    def find_winner(self) -> list[int] | None:
+        attackers = self.get_attackers()
+        defenders = self.get_defenders()
 
-class CaptureBattle(BattleType):
-    def captured_objects(self):
-        objects = self.battle.data_manager.select_dict('BATTLE_OBJECTS', f'battle_id = {self.battle.battle_id} AND captured is not NULL')
-        return [obj.get('object_id') for obj in objects]
+        if self.check_target_elimination():
+            return attackers if attackers else None
+        else:
+            return defenders if defenders else None
 
-    def check_final_condition(self):
-        captured_objects = self.captured_objects()
-        if not captured_objects:
+    def check_battle_end(self) -> bool:
+
+        if self.single_team_check():
+            return True
+
+        if self.find_winner():
+            return True
+        else:
+            self.add_extra_rounds(5)
+            return False
+
+
+class Interception(BattleType):
+    def find_winner(self) -> list[int] | None:
+        teams_scores = self.get_teams_winpoints()
+        max_score = max(teams_scores.values())
+
+        max_score_teams = 0
+        for team, score in teams_scores.items():
+            if score == max_score:
+                max_score_teams += 1
+
+        if max_score_teams == 1:
+            for team, score in teams_scores.items():
+                if score == max_score:
+                    return [team]
+        else:
+            self.set_overkill()
             return None
 
-        captured_teams = []
-        for object_id in captured_objects:
-            team = GameObject(object_id, data_manager=self.battle.data_manager).captured
-            captured_teams.append(team)
+    def check_battle_end(self) -> bool:
 
-        team_list = list(set(captured_teams))
-        teams_captures = {}
+        if self.single_team_check():
+            return True
 
-        for team in team_list:
-            teams_captures[team] = captured_teams.count(team)
-
-        max_captures = 0
-        final_condition = None
-        for team in teams_captures:
-            if teams_captures[team] > max_captures:
-                max_captures = teams_captures[team]
-                final_condition = team
-
-        return final_condition
+        if self.find_winner():
+            return True
+        else:
+            self.add_extra_rounds(5)
+            return False
 
 
-class TransitionBattle(BattleType):
-    def check_final_condition(self):
-        transiting_team = self.get_condition_value()
-        if transiting_team is None:
+class Raid(BattleType):
+    def find_winner(self) -> list[int] | None:
+        teams_scores = self.get_teams_winpoints()
+        max_score = max(teams_scores.values())
+
+        max_score_teams = 0
+        for team, score in teams_scores.items():
+            if score == max_score:
+                max_score_teams += 1
+
+        if max_score_teams == 1:
+            for team, score in teams_scores.items():
+                if score == max_score:
+                    return [team]
+        else:
+            self.set_overkill()
             return None
 
-        available_team_characters = [member.get('character_id') for member in self.battle.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle.battle_id} AND team_id = {transiting_team}')]
-        final_layer = max(list(self.battle.get_layers().keys()))
+    def check_battle_end(self) -> bool:
+        if self.single_team_check():
+            return True
 
-        team_characters_layers = []
-        for member in available_team_characters:
-            layer = self.battle.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {member}')[0].get('layer_id')
-            team_characters_layers.append(layer)
+        if self.find_winner():
+            return True
+        else:
+            self.add_extra_rounds(5)
+            return False
 
-        if len(team_characters_layers) > 1:
+
+class Capture(BattleType):
+    def find_winner(self) -> list[int] | None:
+        teams_scores = self.get_teams_winpoints()
+        max_score = max(teams_scores.values())
+
+        max_score_teams = 0
+        for team, score in teams_scores.items():
+            if score == max_score:
+                max_score_teams += 1
+
+        if max_score_teams == 1:
+            for team, score in teams_scores.items():
+                if score == max_score:
+                    return [team]
+        else:
+            self.set_overkill()
             return None
 
-        if team_characters_layers[0] != final_layer:
-            return None
+    def check_battle_end(self) -> bool:
 
-        return transiting_team
+        if self.single_team_check():
+            return True
 
-
-
-
+        if self.find_winner():
+            return True
+        else:
+            self.add_extra_rounds(5)
+            return False
 
 
 
@@ -985,7 +1208,91 @@ class Battlefield(DataModel):
         self.battle_type = self.get('battle_type', 'Overkill') if self.get('battle_type', 'Overkill') else 'Overkill'
         self.type_value = self.get('type_value', None)
 
+    def get_battle_type(self) -> BattleType:
+        """Вовзвращает объект Режима боя указанный в качестве заданного в битве. Если режим боя не задан используется Overkill
+
+        :return: BattleType
+        """
+
+
+        if self.battle_type == 'Overkill':
+            return Overkill(self, data_manager=self.data_manager)
+        elif self.battle_type == 'Elimination':
+            return Elimination(self, data_manager=self.data_manager)
+        elif self.battle_type == 'Interception':
+            return Interception(self, data_manager=self.data_manager)
+        elif self.battle_type == 'Raid':
+            return Raid(self, data_manager=self.data_manager)
+        elif self.battle_type == 'Capture':
+            return Capture(self, data_manager=self.data_manager)
+        else:
+            return Overkill(self, data_manager=self.data_manager)
+
+    def get_winner(self) -> list[int]:
+        """
+            Выдаёт список идентификаторов команд-победителей по итогам боя
+
+            :return: list[int]
+            """
+        winners = self.get_battle_type().find_winner()
+        return winners if winners else []
+
+    def set_battle_type(self, battle_type: str):
+        """
+            Устанавливает режим боя из доступных в базе данных и коде
+
+            :param battle_type: идентификатор режима боя (например: Overkill, Capture, Raid и т.д.)
+
+            """
+
+        self.battle_type = battle_type
+        self.data_manager.update('BATTLE_INIT', {'battle_type': self.battle_type}, f'id = {self.battle_id}')
+
+    def set_battle_type_target(self, target):
+        """
+            Устанавливает цель для режима боя (напримере для ликвидации целью будет идентификатор цели которую нужно убить)
+
+            :param target: (int|str|None) заданная цель режима боя
+
+            :return: str
+            """
+
+        self.type_value = target
+        self.data_manager.update('BATTLE_INIT', {'type_value': target}, f'id = {self.battle_id}')
+
+    def get_battle_type_label(self) -> str:
+        """
+            Возвращает название режима боя. Если режим боя задан неверно выдаст название "Столкновение"
+
+            :return: str
+            """
+
+        if self.data_manager.check('BATTLE_CONDITIONS', filter=f'id = "{self.battle_type}"'):
+            return self.data_manager.select_dict('BATTLE_CONDITIONS', filter=f'id = "{self.battle_type}"')[0].get('label')
+        else:
+            return self.data_manager.select_dict('BATTLE_CONDITIONS', filter=f'id = "Overkill"')[0].get('label')
+
+    def set_last_round(self, round:int):
+        """
+            Устанавливает последний раунд в бою
+
+            :param round: Номер последнего раунда
+
+            :return: None
+            """
+
+        self.last_round = round
+        self.data_manager.update('BATTLE_INIT', {'last_round': round}, f'id = {self.battle_id}')
+
     def get_layers(self) -> dict[int, Layer]:
+        f"""
+            Возвращает словарь всех слоёв на поле боя:
+            Ключ - Идентификатор слоя\n
+            Значение - экземпляр слоя
+
+            :return: dict[int, Layer]
+            """
+
         if not self.data_manager.check('BATTLE_LAYERS', f'battle_id = {self.battle_id}'):
             return {}
 
@@ -997,6 +1304,12 @@ class Battlefield(DataModel):
         return layers_dict
 
     def fetch_teams(self) -> list[int]:
+        """
+            Возвращает список идентификаторов всех команд на поле боя
+
+            :return: list[int]
+            """
+
         if self.data_manager.check('BATTLE_TEAMS', f'battle_id = {self.battle_id}'):
             teams = self.data_manager.select_dict('BATTLE_TEAMS', filter=f'battle_id = {self.battle_id}')
             return [team.get('team_id') for team in teams]
@@ -1004,12 +1317,28 @@ class Battlefield(DataModel):
             return []
 
     def fetch_actors(self) -> list[int]:
+        """
+        Возвращает список идентификаторов всех активных персонажей на поле боя
+
+        :return: list[int]
+        """
+
         if self.data_manager.check('BATTLE_CHARACTERS', f'battle_id = {self.battle_id}') is None:
             return []
         else:
             return [c.get('character_id') for c in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id}')]
 
     def add_actor(self, actor_id: int, **kwargs) -> None:
+        """
+            Добавляет актора на поле боя.
+            Если персонаж уже есть на поле боя - обновляет его параметры боя
+
+            :param actor_id: int - идентификатор персонажа
+            :param kwargs: dict - дополнительные параметры актора (layer_id, object, team_id, initiative)
+
+            :return: float - итоговый размер в метрах
+        """
+
         if self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {actor_id}'):
             prompt = {'battle_id': self.battle_id,
                       'character_id': actor_id,
@@ -1033,13 +1362,26 @@ class Battlefield(DataModel):
             self.data_manager.insert('BATTLE_CHARACTERS', prompt)
 
     def calculate_size(self) -> float:
+        """
+            Выводит размер поля боя исходя из слоёв и расстояния между слоями (self.distance_delta)
+
+            :return: float - итоговый размер в метрах
+        """
+
         layers = self.get_layers()
         min_layer = min(layers.keys())
         max_layer = max(layers.keys())
 
         return (max_layer - min_layer) * self.distance_delta
 
-    def max_initiative_actor(self) -> int:
+    def max_initiative_actor(self) -> int | None:
+        """
+            Выводит идентификатор персонажа с максимальной инициативой среди списка !активных! персонажей.
+            Если все персонажи завершили свои ходы, выведет None
+
+            :return: int | None - идентификатор персонажа с максимальной инициативой
+        """
+
         c_list = self.fetch_actors()
         c_actor = None
         max_initiative = 0
@@ -1052,11 +1394,23 @@ class Battlefield(DataModel):
         return c_actor
 
     def turn_order(self) -> list[int]:
+        """
+            Выводит упорядоченный список ходов персонажей
+
+            :return: list[int] - список идентификаторов персонажей
+        """
+
         c_list = self.fetch_actors()
         sorted_actors = sorted(c_list, key=lambda actor: Actor(actor, data_manager=self.data_manager).initiative, reverse=True)
         return [actor for actor in sorted_actors]
 
     def current_turn_index(self) -> int:
+        """
+            Выводит текущий номер хода
+
+            :return: int - индекс хода персонажа
+        """
+
         for index, actor in enumerate(self.turn_order()):
             if Actor(actor, data_manager=self.data_manager).is_active:
                 return index
@@ -1064,19 +1418,53 @@ class Battlefield(DataModel):
             return 0
 
     def actor_turn_index(self, actor_id: int) -> int | None:
+        """
+            Выводит каким по счёту ходит персонаж
+
+            :param actor_id: идентификатор персонажа
+
+            :return: int | None - индекс хода персонажа
+        """
+
         for index, actor in enumerate(self.turn_order()):
             if actor == actor_id:
                 return index
         return None
 
     def delete_actor(self, actor_id: int) -> None:
+        """
+            Полностью удаляет персонажа из битвы (списка активных персонажей и убитых персонажей)
+
+            :param actor_id: идентификатор персонажа
+
+            :return: None
+        """
+
         self.unable_actor(actor_id)
         self.data_manager.delete('BATTLE_DEAD', f'character_id = {actor_id} and battle_id = {self.battle_id}')
 
     def unable_actor(self, actor_id: int) -> None:
+        """
+        Удаляет персонажа из списка активных персонажей битвы
+
+        :param actor_id: идентификатор персонажа
+
+        :return: None
+        """
+
         self.data_manager.delete('BATTLE_CHARACTERS', f'character_id = {actor_id} and battle_id = {self.battle_id}')
 
-    def dead_actor(self, actor_id: int, killer_id: int = None) -> None:
+    def dead_actor(self, actor_id: int, killer_id: int = None, reason:str=None) -> None:
+        """
+        Записывает персонажа в базу данных в качестве убитого
+
+        :param actor_id: идентификатор убитого персонажа
+        :param killer_id: идентификатор убийцы, если присутствует
+        :param reason: описание обстоятельства смерти (необязательно)
+
+        :return: None
+        """
+
         actor = Actor(actor_id, data_manager=self.data_manager)
 
         prompt = {
@@ -1084,30 +1472,122 @@ class Battlefield(DataModel):
             'character_id': actor_id,
             'layer_id': actor.layer_id,
             'killer': killer_id,
-            'team_id': actor.team_id
+            'team_id': actor.team_id,
+            'reason': reason,
         }
 
         self.data_manager.insert('BATTLE_DEAD', prompt)
         self.unable_actor(actor_id)
 
-    def next_round(self):
-        # conds = self.check_condition()
-        #
-        # if conds.status:
-        #     # здесь завершается бой
-        #
-        #     winner_team = conds.victory_team
-        #     if winner_team:
-        #         team = BattleTeam(conds.victory_team, self.id)
-        #     else:
-        #         team = None
-        #
-        #     if winner_team:
-        #         self.winner_exp_gift(1000, winner_team)
-        #
-        #     self.delete_battle()
-        #
-        #     return conds, team
+    def process_wp_by_objects(self):
+        """
+            Обрабатывает все захваченные объекты и выдаёт командам очки победы
+        """
+
+        captured_objects = [GameObject(obj.get('object_id'), data_manager=self.data_manager) for obj in self.data_manager.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {self.battle_id} AND captured IS NOT NULL')]
+        for obj in captured_objects:
+            obj.process_captured()
+
+    def check_battle_ending(self):
+        """
+                        Проверка, соответвтуют ли текущие условия боя условиям завершения боя (зависит от Режима Боя)
+
+                        :return: True/False
+                        """
+
+        from ArbCharacters import CharacterProgress
+
+        battle_type = self.get_battle_type()
+        is_ended = battle_type.check_battle_end()
+        winners = battle_type.find_winner()
+        total_teams = self.fetch_teams()
+
+        alive_participants = [char.get('character_id') for char in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id}')]
+        dead_participants = [char.get('character_id') for char in self.data_manager.select_dict('BATTLE_DEAD', filter=f'battle_id = {self.battle_id}')]
+
+        if not is_ended:
+            return False
+
+        if not winners:
+            winners = []
+
+        teams_modifiers = {None: 1}
+
+        for team in total_teams:
+            is_winner = team in winners
+            exp_modifier = 1.2 if is_winner else 0.75
+            teams_modifiers[team] = exp_modifier
+
+        for member in alive_participants + dead_participants:
+            member_team = BattleTeam.get_actor_team(member, data_manager=self.data_manager)
+            kills = self.data_manager.get_count('BATTLE_DEAD', f'character_id', f'killer = {member}')
+            kills_exp = 250 * kills * teams_modifiers[member_team.id if member_team else None]
+            win_points_exp = member_team.winpoints * 100 if member_team else 0
+
+            print(member, )
+
+            CharacterProgress(member, data_manager=self.data_manager).update_progress_data(exp=kills_exp+win_points_exp)
+
+        return True
+
+    def end_battle(self) -> ResponsePool:
+        """
+                Финальный скрипт окончания боя.
+                Выдаёт полученный за бой опыт персонажам.
+                Удаляет всю информацию о битве (заканчивает битву)
+                Добавляет персонажам информацию о произошедших событиях (смертях, победе/поражении)
+
+                :return: ResponsePool - Информация о завершении боя (победители, проигравшие, потери)
+                """
+        # TODO: Добавить удаление битвы
+        # TODO: Записывание в память персонажа информацию о погибших и о победе/поражении
+
+        winners = self.get_winner()
+        if not winners:
+            winners = []
+        all_teams = self.fetch_teams()
+        ending_text = f''
+        for team in all_teams:
+            team_obj = BattleTeam(team, data_manager=self.data_manager)
+            team_casualties = team_obj.compare_casualties()
+
+            if team in winners:
+                prefix = ''
+                if team_casualties <= 0:
+                    prefix = 'Решительная '
+                elif 50 < team_casualties <= 70:
+                    prefix = 'Тяжелая '
+                elif 70 < team_casualties:
+                    prefix = 'Пиррова '
+
+                ending_text += f'- *{prefix}Победа {team_obj.label}*\n'
+            else:
+                prefix = ''
+                if team_casualties <= 0:
+                    prefix = 'Героическое '
+                elif 50 < team_casualties <= 70:
+                    prefix = 'Тяжелое '
+                elif 70 < team_casualties:
+                    prefix = 'Сокрушительное '
+
+                ending_text += f'- *{prefix}Поражение {team_obj.label}*\n'
+            ending_text += f'-# *Потери: {team_obj.count_casulties()}*\n-# *Выжившие: {team_obj.count_participants()}*\n\n'
+
+        return ResponsePool(Response(True, ending_text, f'Конец {self.label} ({self.get_battle_type_label()})'))
+
+    def next_round(self) -> tuple[bool, ResponsePool]:
+        """
+        Запускает следующий раунд (обновляет инициативу персонажей, просчитывает захваченные точки и выдаёт за них очки победы)
+        Если прошедший раунд был последним, запускает проверку окончания боя
+
+        :return: tuple(bool (завершился ли бой), ResponsePool(вывод событий боя))
+        """
+
+        self.process_wp_by_objects()
+
+        is_end = self.check_battle_ending()
+        if is_end:
+            return True, self.end_battle()
 
         self.round += 1
         self.data_manager.update('BATTLE_INIT', {'round': self.round}, f'id = {self.battle_id}')
@@ -1128,9 +1608,9 @@ class Battlefield(DataModel):
 
         BattleLogger.log_event(self.data_manager, self.battle_id, 'NewCycle', event_description=f'Начинается {self.round} раунд!')
 
-        return False
+        return False, ResponsePool(Response(True, f'*Начинается {"последний " if self.round == self.last_round else ""}{self.round} раунд!*', 'Сражение продолжается'))
 
-    def next_actor(self) -> tuple[int | None, int | None]:
+    def next_actor(self) -> ResponsePool:
         if self.data_manager.check('BATTLE_CHARACTERS', f'battle_id = {self.battle_id} AND is_active = 1'):
             active_actor = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id} AND is_active = 1')[0].get('character_id')
             Actor(active_actor, data_manager=self.data_manager).set_active(False)
@@ -1141,17 +1621,20 @@ class Battlefield(DataModel):
             Actor(n_actor, data_manager=self.data_manager).set_active(True)
             BattleLogger.log_event(self.data_manager, self.battle_id, 'NewTurn', actor_id=n_actor, event_description=f'Персонаж {n_actor} начинает свой ход!')
 
-            return n_actor, None
+            return ResponsePool(Response(True, f'*Персонаж ||(ID {n_actor})|| начинает свой ход!*', 'Ход'))
         else:
             is_last_round = self.next_round()
-            if is_last_round:
-                return None, is_last_round
+            if is_last_round[0]:
+                return is_last_round[1]
 
             n_actor = self.max_initiative_actor()
             Actor(n_actor, data_manager=self.data_manager).set_active(True)
             BattleLogger.log_event(self.data_manager, self.battle_id, 'NewTurn', actor_id=n_actor, event_description=f'Персонаж {n_actor} начинает свой ход!')
 
-            return n_actor, self.round
+            responses = is_last_round[1].responses
+            responses.append(Response(True, f'*Персонаж ||(ID {n_actor})|| начинает свой ход!*', 'Ход'))
+
+            return ResponsePool(responses)
 
     def is_last_actor(self, actor_id: int) -> bool:
         order_list = self.turn_order()
@@ -1159,21 +1642,6 @@ class Battlefield(DataModel):
             return True
         else:
             return False
-
-    def winner_exp_gift(self, exp: int, team_id: int = None, actors_list: list = None):
-        from ArbCharacters import Character
-
-        winner_team = team_id
-        actors = actors_list
-
-        if winner_team:
-            members = BattleTeam(team_id, self.id, data_manager=self.data_manager).fetch_members()
-            for member in members:
-                Character(member, data_manager=self.data_manager).add_exp(exp)
-
-        if actors:
-            for member in actors:
-                Character(member, data_manager=self.data_manager).add_exp(exp)
 
     def create_team(self, label: str, role: str = None) -> BattleTeam:
         if not self.data_manager.check('BATTLE_TEAMS', 'battle_id'):
@@ -3270,7 +3738,7 @@ class MeleeHandler(EventHandler):
 
 
 
-
+print(Battlefield(1).next_actor())
 
 # time = datetime.datetime.now()
 # print(Actor(1).move_to_layer(0))
