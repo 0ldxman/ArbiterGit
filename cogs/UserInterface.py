@@ -1,3 +1,5 @@
+import datetime
+
 import discord
 from discord.ext import commands
 from discord import default_permissions
@@ -22,6 +24,7 @@ class CharacterMenu(BasicCog):
 
     generate = discord.SlashCommandGroup("generate", "Команды генерации")
     character = discord.SlashCommandGroup("character", 'Команды интерфейса персонажа')
+    reg = discord.SlashCommandGroup("reg", 'Команды регистрации')
 
     async def tables_list(self):
         db = DataManager()
@@ -202,6 +205,18 @@ class CharacterMenu(BasicCog):
         view = Paginator(embeds, ctx, ignore_footer=True)
         await ctx.respond(view=view, embed=embeds[page-1 if page and page <= len(embeds) else 0])
 
+    @reg.command(name='start_registration')
+    async def __start_registration(self, ctx):
+        from ArbRegistration import CharacterRegistration
+
+        author = ctx.author.id
+        character_registration = CharacterRegistration(ctx)
+        character_registration.form.extend_data('owner', [author])
+        character_registration.form.extend_data('update', [datetime.datetime.now().date().strftime('%Y-%m-%d')])
+        character_registration.form.extend_data('server', [ctx.guild.id])
+        result = await character_registration.start()
+
+        print(result)
 
 
 class CharacterCombat(BasicCog):

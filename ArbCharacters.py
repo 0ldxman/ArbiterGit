@@ -6,6 +6,7 @@ from ArbRoll import Roll
 from ArbSkills import SkillInit
 from ArbUtils.ArbTimedate import TimeManager
 from ArbRaces import Race
+from ArbResponse import Response, ResponsePool
 
 
 class CharacterProgress(DataModel):
@@ -20,7 +21,6 @@ class CharacterProgress(DataModel):
 
         self.lvl = self.get('lvl', 0) if self.get('lvl', None) is not None else 0
         self.skills_exp = self.get('exp', 0) if self.get('exp', None) is not None else 0
-
 
     def insert_progress_data(self, skills: int = None, skills_mods:float=None, lvl: int = None, exp: int = None):
         prompt = {
@@ -45,6 +45,58 @@ class CharacterProgress(DataModel):
         }
 
         self.data_manager.update('CHARS_PROGRESS', prompt, filter=f'id = {self.id}')
+
+    def spend_exp_on_skill(self, skill_id:str, exp: float) -> ResponsePool:
+        from ArbSkills import Skill
+
+        skill = Skill(self.id, skill_id, data_manager=self.data_manager)
+        if exp < 0:
+            return ResponsePool(Response(False, f'-# *Опыт затрачиваемый на прокачку не может быть ниже 0*'))
+
+        if self.skills_exp < exp:
+            exp = self.skills_exp
+
+        skill.upgrade_skill(exp)
+        return ResponsePool(Response(True, f'*Вы потратили **{exp} единиц опыта** для прокачки навыка "{skill.label}".\n-# Текущий уровень навыка: {skill.lvl}\n-# Текущий опыт навыка: {skill.exp}*'))
+
+    def spend_skill_points(self, skill_id: str, skill_points:int):
+        from ArbSkills import Skill
+
+        skill = Skill(self.id, skill_id, data_manager=self.data_manager)
+        if skill_points < 0:
+            return ResponsePool(Response(False, f'-# *Очки навыков, затрачиваемые на прокачку, не могут быть ниже 0*'))
+
+        if self.skills_points < skill_points:
+            skill_points = self.skills_points
+
+        skill.add_lvl(skill_points)
+        return ResponsePool(Response(True, f'*Вы потратили **{skill_points} очков навыков** для прокачки навыка "{skill.label}".\n-# Текущий уровень навыка: {skill.lvl}*'))
+
+    def spend_talent_points(self, skill_id: str, talent_points:float):
+        from ArbSkills import Skill
+
+        skill = Skill(self.id, skill_id, data_manager=self.data_manager)
+        if talent_points < 0:
+            return ResponsePool(Response(False, f'-# *Очки владения, затрачиваемые на прокачку, не могут быть ниже 0*'))
+
+        if self.skills_mods < talent_points:
+            talent_points = self.skills_mods
+
+        skill.add_talant(talent_points)
+        return ResponsePool(Response(True, f'*Вы потратили **{talent_points} очков владения** для прокачки навыка "{skill.label}".\n-# Текущий талант навыка: {skill.talant}*'))
+
+    def spend_mastery_points(self, skill_id: str, mastery_points:float):
+        from ArbSkills import Skill
+
+        skill = Skill(self.id, skill_id, data_manager=self.data_manager)
+        if mastery_points < 0:
+            return ResponsePool(Response(False, f'-# *Очки владения, затрачиваемые на прокачку, не могут быть ниже 0*'))
+
+        if self.skills_mods < mastery_points:
+            mastery_points = self.skills_mods
+
+        skill.upgrade_skill(mastery_points)
+        return ResponsePool(Response(True, f'*Вы потратили **{mastery_points} очков владения** для прокачки навыка "{skill.label}".\n-# Текущее мастерство навыка: {skill.mastery}*'))
 
 
 class Character(DataModel):
@@ -71,6 +123,7 @@ class Character(DataModel):
         self.picture = self.get('avatar', '') if self.get('avatar') else ''
         self.update = self.get('updated', None)
         self.server = self.get('server', None)
+        self.money = self.get('money', None) if self.get('money') else 0
 
     def set_last_update_date(self, date:str):
         self.update = date
@@ -106,6 +159,10 @@ class Character(DataModel):
         return next_day
 
     def skip_cycle(self):
+        """Расчитывает смену одного цикла, обновляя необходимые параметры
+        :return: None
+        """
+
         from ArbHealth import Body
 
         Body(self.id, data_manager=self.data_manager).rest()
@@ -114,10 +171,19 @@ class Character(DataModel):
         next_day = self.get_next_day_after_update().strftime('%Y-%m-%d')
         self.set_last_update_date(next_day)
 
-    def change_cycle(self, cycles:int):
-        """Сменяет циклы в количестве cycles:int"""
+    def change_cycle(self, cycles:int, **kwargs):
+        """Сменяет несколько циклов поочерёдно
+            :param cycles: Количество циклов
+            :return: None
+        """
+
+        rest_efficiency = kwargs.get('rest_efficiency', 0) if kwargs.get('rest_efficiency') is not None else 0
 
         max_cycles = self.get_last_update_difference()
+        max_cycle_manually = kwargs.get('max_cycles', max_cycles)
+        if max_cycle_manually < max_cycles:
+            max_cycles = max_cycle_manually
+
         if cycles > max_cycles:
             cycles = max_cycles
 
@@ -166,3 +232,48 @@ class Character(DataModel):
 '''
 
         return total_text
+
+    def spend_money(self, cost:float) -> bool:
+        """
+        Проверяет наличие необходимой суммы, и в случае такаяя сумма есть списывает деньги со счёта персонажа
+
+        :param cost: (float) количество потраченных денег
+        :return:
+        """
+
+        if self.money < cost:
+            return False
+        else:
+            self.money -= cost
+            self.data_manager.update('CHARS_INIT', {'money': self.money}, f'id = {self.id}')
+            return True
+
+    def add_money(self, amount: float) -> None:
+        """
+        Добавляет указанную сумму денег к счёту персонажа
+
+        :param amount: (float) добавляемая сумма
+        :return: None
+        """
+
+        self.money += amount
+        self.data_manager.update('CHARS_INIT', {'money': self.money}, f'id = {self.id}')
+
+    def give_money(self, amount: float, character_id:int=None) -> bool:
+        """
+        Отдаёт указанную сумму денег персонажу
+
+        :param amount: (float) переданная сумма денег
+        :return: None
+        """
+
+        amount_check = self.spend_money(amount)
+        if not amount_check:
+            return False
+
+        if character_id is not None:
+            char = Character(character_id, data_manager=self.data_manager)
+            char.add_money(amount)
+            return True
+        else:
+            return True

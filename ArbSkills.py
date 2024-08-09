@@ -45,7 +45,6 @@ class Skill(SkillInit, DataModel):
 
         return capacity, add_capacity
 
-
     def change_lvl(self, lvl:int):
         query = {'lvl': self.lvl + lvl}
         self.update_record(query)
@@ -79,6 +78,11 @@ class Skill(SkillInit, DataModel):
     def add_mastery(self, mastery:float):
         self.mastery += mastery
         query = {'mastery': self.mastery}
+        self.update_record(query)
+
+    def add_lvl(self, lvl:int):
+        self.lvl += lvl
+        query = {'lvl': self.lvl}
         self.update_record(query)
 
     def check_skill_record(self):

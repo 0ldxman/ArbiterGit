@@ -4,6 +4,8 @@ import random
 from ArbDatabase import DataManager, DataModel, DataDict
 from ArbMaterial import Material
 from ArbQuality import Quality
+from abc import ABC, abstractmethod
+from ArbResponse import Response, ResponsePool
 
 
 class Item(DataModel):
@@ -332,3 +334,305 @@ class CharacterEquipment:
             weapon_string = f'-# **Экипированное оружие:**\n- *Отсутствует*'
 
         return f'{clothes_string}\n\n{weapon_string}'
+
+
+class ItemComponent(ABC):
+    def __init__(self, item: Item):
+        self.item = item
+
+    @abstractmethod
+    def use(self, user_id:int, **kwargs):
+        pass
+
+
+class UsableComponent(ItemComponent):
+    def __init__(self, item: Item, endurance_reduce:int = 10):
+        super().__init__(item)
+        self.endurance_reduce = endurance_reduce
+
+    def use(self, user_id: int, **kwargs):
+        self.item.change_endurance(-1 * self.endurance_reduce)
+        print(f'{self.item.label} ({self.item.item_id}) использовано {user_id}!')
+
+        return Response(True,
+                        f'*Вы использовали {self.item.label} на {self.endurance_reduce}%*',
+                        'Использование')
+
+
+class InjuryReduceComponent(ItemComponent):
+    def __init__(self, item: Item, damage_points:int = 20):
+        super().__init__(item)
+        self.damage_reduce = damage_points
+
+    def use(self, user_id:int, **kwargs):
+        from ArbHealth import Body
+        body = Body(user_id, data_manager=self.item.data_manager)
+        injuries = body.get_injuries_list()
+
+        if not injuries:
+            return
+
+        damage_points = self.damage_reduce
+        while damage_points > 0:
+            if not injuries:
+                break
+
+            injury = random.choice(injuries)
+            damage_reduce = random.randint(1, min(damage_points, injury.damage))
+            injury.change_damage(-1 * damage_reduce)
+            if injury.damage <= 0:
+                injury.delete_record()
+
+            damage_points -= damage_reduce
+            print(f'{user_id} снизил повреждение от ранений на {damage_reduce}!')
+
+        return Response(True,
+                        f'*Вы залечиваете свои раны ||(восстановлено {self.damage_reduce} единиц урона)|| при помощи {self.item.label}*',
+                        'Лечение ранений')
+
+
+class AddDiseaseComponent(ItemComponent):
+    def __init__(self, item: Item, disease_id: str, disease_level: int = 0):
+        super().__init__(item)
+        self.disease_id = disease_id
+        self.disease_level = disease_level
+
+    def use(self, user_id:int, **kwargs):
+        from ArbHealth import Disease
+        Disease.create_character_disease(user_id, self.disease_id, severity=self.disease_level, data_manager=self.item.data_manager)
+        print(f'{user_id} получил заболевание {self.disease_id} на уровне {self.disease_level}%!')
+
+        return Response(False,
+                        f'*После использования {self.item.label} вы чувствуете некоторые изменения в самочувствии...*',
+                        'Самочувствие')
+
+
+class BloodRecoveryComponent(ItemComponent):
+    def __init__(self, item: Item, bloodout_reducing: float):
+        super().__init__(item)
+        self.bloodout_reducing = bloodout_reducing
+
+    def use(self, user_id: int, **kwargs):
+        from ArbHealth import Body
+        body = Body(user_id, data_manager=self.item.data_manager)
+        bleedout = body.get_bleedout()
+
+        if not bleedout:
+            return
+
+        bleedout.add_severity(-1 * self.bloodout_reducing)
+        if bleedout.current_severity <= 0:
+            bleedout.delete_record()
+
+        print(f'{user_id} восполнил свою кровь на {self.bloodout_reducing}%!')
+        return Response(True,
+                        f'*Вы восстановили кровопотерю на {self.bloodout_reducing}% при помощи {self.item.label}*',
+                        'Восполнение крови')
+
+
+class HealInjuryComponent(ItemComponent):
+    def __init__(self, item: Item, healing_efficiency: float):
+        super().__init__(item)
+        self.healing_efficiency = healing_efficiency
+
+    def use(self, user_id: int, **kwargs):
+        from ArbHealth import Body, Injury
+        body = Body(user_id, data_manager=self.item.data_manager)
+        injuries: list[Injury] = body.get_injuries_list()
+
+        if not injuries:
+            return
+
+        injuries_id = [inj.injury_id for inj in injuries]
+        healing_injury = kwargs.get('injury_id')
+        if not healing_injury:
+            healing_injury = random.choice(injuries_id)
+
+        injury = Injury(healing_injury, data_manager=self.item.data_manager)
+        injury.set_healing(self.healing_efficiency)
+
+        print(f'Ранение {healing_injury} было залечено {user_id} на {self.healing_efficiency}!')
+
+        return Response(True, f'*Вы остановили кровотечение {injury.injury_type.label} при помощи {self.item.label}*',
+                        'Остановка кровотечения')
+
+
+class TotalHealingComponent(ItemComponent):
+    def __init__(self, item: Item, healing_efficiency: float):
+        super().__init__(item)
+        self.healing_efficiency = healing_efficiency
+
+    def use(self, user_id:int, **kwargs):
+        from ArbHealth import Body
+
+        body = Body(user_id, data_manager=self.item.data_manager)
+
+        injuries_list = body.get_injuries_list()
+        disease_list = body.get_diseases_list()
+        for i in injuries_list:
+            i.set_healing(self.healing_efficiency)
+
+        for i in disease_list:
+            i.add_healing(self.healing_efficiency)
+
+        print(f'Персонажу {user_id} залечили все ранения и болезни на {self.healing_efficiency}%')
+
+        return Response(True, f'*Вы залечили ранения и болезни при помощи {self.item.label}*','Уход за ранами')
+
+
+class ItemSpawnerComponent(ItemComponent):
+    def __init__(self, item: Item, item_type: str, count: int = 1):
+        super().__init__(item)
+        self.item_type = item_type
+        self.count = count
+
+    def use(self, user_id:int, **kwargs):
+        from ArbGenerator import ItemManager
+
+        for _ in range(self.count):
+            spawned_item = ItemManager(self.item_type, data_manager=self.item.data_manager).spawn_item(user_id)
+            print(f'{spawned_item.label} ({spawned_item.item_id}) создано для персонажа {user_id}!')
+
+            return Response(True, f'*Вы создали {spawned_item.label} при помощи {self.item.label}*',
+                            'Создание')
+
+
+class BattleObjectSpawnComponent(ItemComponent):
+    def __init__(self, item: Item, object_type: str, count: int = 1):
+        super().__init__(item)
+        self.battle_object_type = object_type
+        self.count = count
+
+    def use(self, user_id: int, **kwargs):
+        from ArbBattle import Actor, Layer, ObjectType
+
+        if Actor(user_id, data_manager=self.item.data_manager).battle_id is None:
+            return
+
+        actor = Actor(user_id, data_manager=self.item.data_manager)
+        layer: Layer = actor.get_layer()
+        object_id = None
+        for _ in range(self.count):
+            object_id = layer.add_object(self.battle_object_type)
+            print(f'{self.battle_object_type} ({object_id}) был создан на поле боя {actor.battle_id} персонажем {user_id}!')
+
+        if object_id:
+            self.item.data_manager.update('BATTLE_CHARACTERS', {'object': object_id}, f'character_id = {user_id}')
+
+        return Response(True, f'*Вы создали несколько {ObjectType(self.battle_object_type, data_manager=self.item.data_manager).label} при помощи {self.item.label}*', 'Создание объектов')
+
+
+class ResurrectionComponent(ItemComponent):
+    def __init__(self, item: Item):
+        super().__init__(item)
+
+    def use(self, user_id: int, **kwargs):
+        from ArbHealth import Body
+
+        body = Body(user_id, data_manager=self.item.data_manager)
+        injuries_list = body.get_injuries_list()
+        diseases_list = body.get_diseases_list()
+
+        for i in injuries_list + diseases_list:
+            i.delete_record()
+
+        print(f'Персонаж {user_id} был воскрешен!')
+        return Response(True, f'*Персонаж был воскрешен при помощи {self.item.label}*', 'Воскрешение!')
+
+
+class RepairComponent(ItemComponent):
+    def __init__(self, item: Item, repair_efficiency: int):
+        super().__init__(item)
+        self.repair_efficiency = repair_efficiency
+
+    def use(self, user_id:int, **kwargs):
+        clothes = CharacterEquipment(user_id, data_manager=self.item.data_manager).items_slots().get('Одежда', [])
+
+        cloth_to_repair = Item(kwargs.get('clothes_id'), data_manager=self.item.data_manager) if kwargs.get('clothes_id') is not None else None
+        if cloth_to_repair is None:
+            cloth_to_repair = random.choice(clothes)
+
+        cloth_to_repair.change_endurance(self.repair_efficiency)
+
+        return Response(True, f'*Вы отремонтировали {cloth_to_repair.label} при помощи {self.item.label}*', 'Ремонт')
+
+
+class SkipCycleComponent(ItemComponent):
+    def __init__(self, item: Item, rest_efficiency: float):
+        super().__init__(item)
+        self.rest_efficiency = rest_efficiency
+
+    def use(self, user_id:int, **kwargs):
+        from ArbCharacters import Character
+
+        rest = Character(user_id, data_manager=self.item.data_manager).change_cycle(1, max_cycles=3, rest_efficiency=self.rest_efficiency)
+        print(f'Персонаж {user_id} отдыхает при помощи {self.item.label}')
+
+        return Response(True, f'*Вы немного отдохнули при помощи {self.item.label}...*', 'Отдых')
+
+
+class UsableItem:
+    def __init__(self, item: Item, added_components: list = None):
+        self.item = item
+
+        self.components = added_components if added_components is not None else []
+        self.get_all_comonents()
+
+    def add_component(self, component: ItemComponent):
+        self.components.append(component)
+
+    def get_all_comonents(self):
+        if not self.item.data_manager.check('ITEMS_EFFECTS', f'item_id = "{self.item.type}"'):
+            return []
+
+        effects = self.item.data_manager.select_dict('ITEMS_EFFECTS', filter=f'item_id = "{self.item.type}"')
+        for effect in effects:
+            component_type = effect.get('effect_type')
+            component_value = effect.get('value')
+            component_count = effect.get('count')
+            component_chance = effect.get('chance', 0) if effect.get('chance', None) is not None else 100
+            if random.randint(0, 100) > component_chance:
+                continue
+
+            if component_type == 'InjuryReduce':
+                comp = InjuryReduceComponent(self.item, component_value)
+            elif component_type == 'AddDisease':
+                comp = AddDiseaseComponent(self.item, component_value, component_count)
+            elif component_type == 'BloodRecovery':
+                comp = BloodRecoveryComponent(self.item, component_value)
+            elif component_type == 'HealInjury':
+                comp = HealInjuryComponent(self.item, component_value)
+            elif component_type == 'TotalHealing':
+                comp = TotalHealingComponent(self.item, component_value)
+            elif component_type == 'ItemSpawner':
+                comp = ItemSpawnerComponent(self.item, component_value, component_count)
+            elif component_type == 'BattleObjectSpawn':
+                comp = BattleObjectSpawnComponent(self.item, component_value, component_count)
+            elif component_type == 'Resurrection':
+                comp = ResurrectionComponent(self.item)
+            elif component_type == 'Repair':
+                comp = RepairComponent(self.item, component_value)
+            elif component_type == 'SkipCycle':
+                comp = SkipCycleComponent(self.item, component_value)
+            elif component_type == 'Usable':
+                comp = UsableComponent(self.item, component_value)
+            else:
+                continue
+
+            self.add_component(comp)
+
+    def use(self, user_id: int, **kwargs) -> ResponsePool:
+        results = []
+        for component in self.components:
+            usage_result = component.use(user_id, **kwargs)
+            results.append(usage_result)
+
+        return ResponsePool(results)
+
+
+# TODO: Добавить предметам в базу данных снижение прочности за использование
+# TODO: Добавить проверку возможности коммуникации исходя из предметов инвентаря (наличие рации, КПК, Нотбука)
+
+# print(UsableItem(Item(2004)).use(1))
+
+

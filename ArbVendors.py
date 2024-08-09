@@ -10,8 +10,6 @@ from abc import ABC, abstractmethod
 
 
 class VendorAbstract(ABC):
-    def __init__(self):
-        super().__init__()
 
     @abstractmethod
     def fetch_data(self):

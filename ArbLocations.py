@@ -1,6 +1,6 @@
 import random
 
-from ArbDatabase import DataManager
+from ArbDatabase import DataManager, DataModel, DataDict
 from dataclasses import dataclass
 from ArbUtils.ArbNums import specnum
 import heapq
@@ -104,21 +104,17 @@ import networkx as nx
 #         return cost, path_with_trails
 
 
-class LocationObjectType:
+class LocationObjectType(DataModel):
     def __init__(self, id:str, **kwargs):
         self.type_id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
-        data = self.fetch_type_data()
-        self.label = data.get('label') if data.get('label') else 'Неизвестный объект'
-        self.type = data.get('type') if data.get('type') else None
-        self.value = data.get('value') if data.get('value') else None
-        self.difficulty = data.get('difficulty') if data.get('difficulty') else 0
 
-    def fetch_type_data(self):
-        if self.data_manager.check('LOC_OBJECTS_INIT',filter=f'id = "{self.type_id}"'):
-            return self.data_manager.select_dict('LOC_OBJECTS_INIT', filter=f'id = "{self.type_id}"')[0]
-        else:
-            return {}
+        DataModel.__init__(self, 'LOC_OBJECTS_INIT', f'id = "{self.type_id}"', data_manager=self.data_manager)
+
+        self.label = self.get('label') if self.get('label') else 'Неизвестный объект'
+        self.type = self.get('type') if self.get('type') else None
+        self.value = self.get('value') if self.get('value') else None
+        self.difficulty = self.get('difficulty') if self.get('difficulty') else 0
 
     def __repr__(self):
         return f'Object.{self.type_id}({self.type})'
@@ -150,31 +146,26 @@ class LocationObject(LocationObjectType):
             return None
 
 
-
-class LocationType:
+class LocationType(DataModel):
     def __init__(self, id:str, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
-        data = self.fetch_data()
-        self.label = data.get('label') if data.get('label') else 'Неизвестный тип локации'
-        self.rest = data.get('rest') if data.get('rest') else None
-        self.medicine = data.get('medicine') if data.get('medicine') else None
-        self.terrain = data.get('terrain') if data.get('terrain') else None
-        self.terrain_category = process_string(data.get('terrain_category')) if data.get('terrain_category', None) else None
-        self.min_layers = data.get('min_layers') if data.get('min_layers') else 1
-        self.max_layers = data.get('max_layers') if data.get('max_layers') else 1
-        self.min_distance = data.get('min_distance') if data.get('min_distance') else 20
-        self.max_distance = data.get('max_distance') if data.get('max_distance') else 100
 
-        self.patrol = data.get('patrol') if data.get('patrol') else None
-        self.trader = data.get('trader') if data.get('trader') else None
-        self.intendant = data.get('intendant') if data.get('intendant') else None
+        DataModel.__init__(self, 'LOC_TYPE', key_filter=f'id = "{self.id}"', data_manager=self.data_manager)
 
-    def fetch_data(self):
-        if self.data_manager.check('LOC_TYPE',filter=f'id = "{self.id}"'):
-            return self.data_manager.select_dict('LOC_TYPE', filter=f'id = "{self.id}"')[0]
-        else:
-            return {}
+        self.label = self.get('label') if self.get('label') else 'Неизвестный тип локации'
+        self.rest = self.get('rest') if self.get('rest') else None
+        self.medicine = self.get('medicine') if self.get('medicine') else None
+        self.terrain = self.get('terrain') if self.get('terrain') else None
+        self.terrain_category = process_string(self.get('terrain_category')) if self.get('terrain_category', None) else None
+        self.min_layers = self.get('min_layers') if self.get('min_layers') else 1
+        self.max_layers = self.get('max_layers') if self.get('max_layers') else 1
+        self.min_distance = self.get('min_distance') if self.get('min_distance') else 20
+        self.max_distance = self.get('max_distance') if self.get('max_distance') else 100
+
+        self.patrol = self.get('patrol') if self.get('patrol') else None
+        self.trader = self.get('trader') if self.get('trader') else None
+        self.intendant = self.get('intendant') if self.get('intendant') else None
 
     def fetch_type_objects(self):
         total_objects = []
@@ -191,25 +182,21 @@ class LocationType:
         return f'LocationType.{self.id}'
 
 
-class Location:
+class Location(DataModel):
     def __init__(self, id:str, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
-        data = self.fetch_data()
-        self.label = data.get('label') if data.get('label') else 'Неизвестное место'
-        self.type = LocationType(data.get('type'), data_manager=self.data_manager) if data.get('type') else None
-        self.cluster = Cluster(data.get('region'), data_manager=self.data_manager) if data.get('region') else None
-        self.owner = data.get('owner') if data.get('owner') else None
-        self.cost = data.get('cost') if data.get('cost') else 0
-        self.picture = data.get('picture') if data.get('picture') else self.cluster.picture
 
-        self.current_battle = data.get('current_battle') if data.get('current_battle') else None
+        DataModel.__init__(self, 'LOC_INIT', f'id = "{self.id}"', data_manager=self.data_manager)
 
-    def fetch_data(self):
-        if self.data_manager.check('LOC_INIT',filter=f'id = "{self.id}"'):
-            return self.data_manager.select_dict('LOC_INIT', filter=f'id = "{self.id}"')[0]
-        else:
-            return {}
+        self.label = self.get('label') if self.get('label') else 'Неизвестное место'
+        self.type = LocationType(self.get('type'), data_manager=self.data_manager) if self.get('type') else None
+        self.cluster = Cluster(self.get('region'), data_manager=self.data_manager) if self.get('region') else None
+        self.owner = self.get('owner') if self.get('owner') else None
+        self.cost = self.get('cost') if self.get('cost') else 0
+        self.picture = self.get('picture') if self.get('picture') else self.cluster.picture
+
+        self.current_battle = self.get('current_battle') if self.get('current_battle') else None
 
     def get_connections(self):
         if self.data_manager.check('LOC_CONNECTIONS',filter=f'(loc_id = "{self.id}" OR con_id = "{self.id}") AND available = 1'):
@@ -288,22 +275,19 @@ class Location:
     def __repr__(self):
         return f'Location.{self.type.id}.{self.id}'
 
-class Cluster:
+
+class Cluster(DataModel):
     def __init__(self, id:str, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
-        data = self.fetch_data()
-        self.label = data.get('label', 'Неизвестный регион') if data.get('label') else 'Неизвестный регион'
-        self.type = data.get('type', 'Квестовый') if data.get('type') else None
-        self.picture = data.get('picture', '') if data.get('picture') else ''
-        self.weather = data.get('weather', 'Sunny') if data.get('weather') else 'Sunny'
-        self.time = data.get('time', 'Day') if data.get('time') else TimeManager().get_current_time_condition()
 
-    def fetch_data(self):
-        if self.data_manager.check('LOC_CLUSTER',filter=f'id = "{self.id}"'):
-            return self.data_manager.select_dict('LOC_CLUSTER', filter=f'id = "{self.id}"')[0]
-        else:
-            return {}
+        DataModel.__init__(self, 'LOC_CLUSTER', f'id = "{self.id}"', data_manager=self.data_manager)
+
+        self.label = self.get('label', 'Неизвестный регион') if self.get('label') else 'Неизвестный регион'
+        self.type = self.get('type', 'Квестовый') if self.get('type') else None
+        self.picture = self.get('picture', '') if self.get('picture') else ''
+        self.weather = self.get('weather', 'Sunny') if self.get('weather') else 'Sunny'
+        self.time = self.get('time', 'Day') if self.get('time') else TimeManager().get_current_time_condition()
 
     def fetch_locations(self):
         if self.data_manager.check('LOC_INIT',filter=f'region = "{self.id}"'):
@@ -350,21 +334,24 @@ class Cluster:
     def __repr__(self):
         return f'Cluster.{self.id}'
 
+
 @dataclass()
 class LocationConnection:
     loc_id: str | None
     cost: int | None
 
 
-class CharacterLocation:
+class CharacterLocation(DataModel):
     def __init__(self, id:int, **kwargs):
         self.id = id
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.insert_data_if_not_exists()
-        data = self.fetch_data()
-        self.location = Location(data.get('loc_id'), data_manager=self.data_manager) if data.get('loc_id') else None
-        self.movement_points = data.get('move_points') if data.get('move_points') else 0
-        self.entered_location = data.get('entered') == 1 if data.get('entered') else False
+
+        DataModel.__init__(self, f'CHARS_LOC', f'id = {self.id}', data_manager=self.data_manager)
+
+        self.location = Location(self.get('loc_id'), data_manager=self.data_manager) if self.get('loc_id') else None
+        self.movement_points = self.get('move_points') if self.get('move_points') else 0
+        self.entered_location = self.get('entered') == 1 if self.get('entered') else False
 
     def insert_data_if_not_exists(self):
         if not self.data_manager.check('CHARS_LOC',filter=f'id = {self.id}'):
@@ -372,12 +359,6 @@ class CharacterLocation:
                       'loc_id': None,
                       'move_points': 0}
             self.data_manager.insert('CHARS_LOC', prompt)
-
-    def fetch_data(self):
-        if self.data_manager.check('CHARS_LOC',filter=f'id = {self.id}'):
-            return self.data_manager.select_dict('CHARS_LOC', filter=f'id = {self.id}')[0]
-        else:
-            return {}
 
     def get_available_locations(self):
         available_locations = self.location.process_connections()
@@ -412,3 +393,5 @@ class CharacterLocation:
         self.data_manager.update('CHARS_LOC', {'loc_id': location_id}, filter=f'id = {self.id}')
 
         return True
+
+

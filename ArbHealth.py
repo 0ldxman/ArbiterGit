@@ -82,7 +82,7 @@ class Injury(DataModel):
         self.injury_type = InjuryType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
 
     @classmethod
-    def get_character_injuries(cls, character_id: int, data_manager: DataManager = None, place: str = None):
+    def get_character_injuries(cls, character_id: int, data_manager: DataManager = None, place: str = None) -> dict[str, list['Injury']]:
         db = data_manager if data_manager is not None else DataManager()
 
         if place is not None:
@@ -229,6 +229,11 @@ class Disease(DataModel):
         severity = kwargs.get('severity', 0)
         immunity = kwargs.get('immunity', 0)
         healing_efficiency = kwargs.get('healing', 0)
+
+        if db.check('CHARS_DISEASE', f'id = {character_id} AND type = "{disease_type_id}" AND place = "{place}"'):
+            return
+        elif db.check('CHARS_DISEASE', f'id = {character_id} AND type = "{disease_type_id}" AND place IS NULL') and place is None:
+            return
 
         query = {'id': character_id,
                  'dis_id': dis_id,
