@@ -324,4 +324,5 @@ class RollCheck:
         return f'SkillCheck({self.sides}, result={self.result})'
 
     def __str__(self):
-        return f'Кубик d{self.sides}\nВыпало: {self.result} {f"(Критический успех!)" if self.is_critical else ""}'
+        return f'Кубик d{self.sides}\n' \
+               f'**Выпало:** {self.result} {f"(Критический успех!)" if self.is_critical else ""}'

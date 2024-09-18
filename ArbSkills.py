@@ -34,8 +34,14 @@ class Skill(SkillInit, DataModel):
 
         self.lvl = self.get('lvl', 0) if self.get('lvl', 0) is not None else 0
         self.talant = self.get('talant', 1) if self.get('talant', 0) is not None else 1
-        self.mastery = self.get('master', 1) if self.get('master', 0) is not None else 1
+        self.mastery = self.get('master', 0) if self.get('master', 0) is not None else 0
         self.exp = self.get('exp', 0) if self.get('exp', 0) is not None else 0
+
+        if not self.check_skill_record():
+            self.insert_skill()
+
+    def delete_skill(self):
+        self.data_manager.delete('CHARS_SKILLS', f'id = {self.character_id} and skill_id = "{self.skill_id}"')
 
     def get_capacities(self):
         capacities = Body(self.character_id, data_manager=self.data_manager).calculate_capacities()
@@ -50,6 +56,11 @@ class Skill(SkillInit, DataModel):
         self.update_record(query)
         self.lvl += lvl
 
+    def set_lvl(self, lvl:int):
+        self.lvl = lvl
+        query = {'lvl': self.lvl}
+        self.update_record(query)
+
     def set_talant(self, talant:float):
         self.talant = talant
         query = {'talant': self.talant}
@@ -57,7 +68,7 @@ class Skill(SkillInit, DataModel):
 
     def set_mastery(self, mastery:float):
         self.mastery = mastery
-        query = {'mastery': self.mastery}
+        query = {'master': self.mastery}
         self.update_record(query)
 
     def set_exp(self, exp:float):
@@ -77,7 +88,7 @@ class Skill(SkillInit, DataModel):
 
     def add_mastery(self, mastery:float):
         self.mastery += mastery
-        query = {'mastery': self.mastery}
+        query = {'master': self.mastery}
         self.update_record(query)
 
     def add_lvl(self, lvl:int):
@@ -157,3 +168,38 @@ class Skill(SkillInit, DataModel):
             return roll.result >= difficulty, roll
         else:
             return roll.result, roll
+
+    @staticmethod
+    def get_skills(character_id:int):
+        db = DataManager()
+        skills = []
+        records = db.select_dict('CHARS_SKILLS', filter=f'id = {character_id}')
+        for skill in records:
+            skills.append(Skill(character_id, skill.get('skill_id')))
+
+        return skills
+
+    def __str__(self):
+        if 1.25 <= self.talant < 1.5:
+            talant_icon = '<:talant_25:1250156284792144096>'
+        elif 1.5 <= self.talant < 1.75:
+            talant_icon = '<:talant_50:1250156286633443379>'
+        elif 1.75 <= self.talant < 2:
+            talant_icon = '<:talant_75:1250156288697045164>'
+        elif 2 <= self.talant:
+            talant_icon = '<:talant_100:1250156290630615140>'
+        else:
+            talant_icon = ''
+
+        if 1.25 <= self.mastery < 1.5:
+            mastery_icon = '<:mastery_25:1250160742716543196> '
+        elif 1.5 <= self.mastery < 1.75:
+            mastery_icon = '<:mastery_50:1250160740648615998> '
+        elif 1.75 <= self.mastery < 2:
+            mastery_icon = '<:mastery_75:1250160738933149757> '
+        elif 2 <= self.mastery:
+            mastery_icon = '<:mastery_100:1250160736651444314>'
+        else:
+            mastery_icon = ''
+
+        return f'- ***{self.label}**{talant_icon}{mastery_icon} - {self.lvl}%* \n-# Прогресс: {self.exp}/{self.skill_progression(self.lvl)} exp.'

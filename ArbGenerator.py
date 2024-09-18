@@ -1,7 +1,7 @@
 import datetime
 import string
 
-from ArbDatabase import DataManager
+from ArbDatabase import DataManager, DataModel
 import pprint
 import random
 from ArbUtils.ArbTextgen import CallsGenerator
@@ -48,22 +48,65 @@ class RandomMaterial:
 
 
 class ItemManager:
-    def __init__(self, item_type:str, **kwargs):
+    def __init__(self, item_type: str, **kwargs):
         self.item_type = item_type
         self.data_manager = kwargs.get('data_manager', DataManager())
 
+        # Предварительно запрашиваем данные предмета
         self.item_table, self.item_class = self.get_item_class()
-        self.item_label = kwargs.get('item_label', self.get_item_label())
-        max_endurance = self.get_max_endurance()
-        self.endurance = kwargs.get('endurance', random.randint(int(max_endurance * 0.4), int(max_endurance)))
+        item_data = self.data_manager.select_dict(self.item_table, filter=f'id = "{self.item_type}"')[0]
+        self.item_label = item_data.get('name', 'Неизвестный предмет')
+
+        self.endurance = self.calculate_endurance(item_data, kwargs.get('endurance'), kwargs.get('set_max_endurance'))
+
         self.quality = RandomQuality.generate_quality(kwargs.get('quality', None))
+        self.material_type = item_data.get('material_type') or self.get_material_type()
 
-        self.material_type = kwargs.get('material_type', None)
-        self.material_tier = kwargs.get('material_tier', 0)
-
-        self.material = self.generate_material(kwargs.get('material'))
+        self.material = self.generate_material(kwargs.get('material')) if self.material_type else None
         self.biocode = kwargs.get('biocode', None)
         self.inventory_id = kwargs.get('inventory', None)
+
+    def calculate_endurance(self, item_data, endurance_percent, set_max_endurance):
+        max_endurance = item_data.get('endurance', 100)
+        if set_max_endurance:
+            return max_endurance
+        return endurance_percent / 100 * max_endurance if endurance_percent else random.randint(int(max_endurance * 0.4), int(max_endurance))
+
+    def get_item_class(self):
+        query = """
+        SELECT 'CLOTHES' AS table_name, 'Одежда' AS item_class
+        FROM CLOTHES WHERE id = ?
+        UNION
+        SELECT 'WEAPONS', 'Оружие'
+        FROM WEAPONS WHERE id = ?
+        UNION
+        SELECT 'ITEMS_INIT', 'Предмет'
+        FROM ITEMS_INIT WHERE id = ?
+        UNION
+        SELECT 'AMMO', 'Граната'
+        FROM AMMO WHERE id = ?
+        """
+
+        result = self.data_manager.raw_execute(query, (self.item_type,) * 4, fetch='one')
+
+        if result:
+            item_table, item_class = result
+        else:
+            item_table, item_class = None, 'Разное'
+
+        return item_table, item_class
+
+    def get_material_type(self):
+        if self.item_class == 'Одежда':
+            material_type = self.data_manager.select_dict('CLOTHES', filter=f'id = "{self.item_type}"')[0].get('material_type')
+        elif self.item_class == 'Оружие':
+            material_type = 'Металл'
+        elif self.item_class == 'Граната':
+            material_type = 'Металл'
+        else:
+            material_type = None
+
+        return material_type
 
     def generate_material(self, material: str=None):
         if material:
@@ -78,41 +121,15 @@ class ItemManager:
             elif self.item_class == 'Граната':
                 material_type = 'Металл'
 
-        return RandomMaterial.generate_material(material_type, self.material_tier, None, data_manager=self.data_manager)
+        print(material_type, self.item_class)
+
+        return RandomMaterial.generate_material(material_type, 3, None, data_manager=self.data_manager)
 
     def get_item_label(self):
         if self.data_manager.check(self.item_table, f'id = "{self.item_type}"'):
             return self.data_manager.select_dict(self.item_table, filter=f'id = "{self.item_type}"')[0].get('name', 'Неизвестный предмет')
         else:
             return 'Неизвестный предмет'
-
-    def get_item_class(self):
-        tables_to_find = ['CLOTHES', 'WEAPONS', 'ITEMS_INIT', 'AMMO']
-        item_class = 'Разное'
-        item_table = None
-
-        for table in tables_to_find:
-            if self.data_manager.check(table, f'id = "{self.item_type}"'):
-                if table == 'CLOTHES':
-                    item_class = 'Одежда'
-                    item_table = 'CLOTHES'
-                elif table == 'WEAPONS':
-                    item_class = 'Оружие'
-                    item_table = 'WEAPONS'
-                elif table == 'ITEMS_INIT':
-                    item_class = 'Предмет'
-                    item_table = 'ITEMS_INIT'
-                elif table == 'AMMO':
-                    item_class = 'Граната'
-                    item_table = 'AMMO'
-
-                break
-
-        else:
-            item_class = 'Разное'
-            item_table = None
-
-        return item_table, item_class
 
     def get_max_endurance(self):
         if self.item_table == 'CLOTHES':
@@ -133,6 +150,79 @@ class ItemManager:
         else:
             return []
 
+    @staticmethod
+    def get_weapon_capacity_static(weapon_id:str, data_manager:DataManager = DataManager()):
+        if data_manager.check('WEAPONS', filter=f'id = "{weapon_id}"'):
+            return data_manager.select_dict('WEAPONS', filter=f'id="{weapon_id}"')[0].get('mag')
+        else:
+            return 0
+    @staticmethod
+    def get_weapon_possible_ammo_static(weapon_id:str, data_manager:DataManager = DataManager()):
+        from ArbWeapons import RangeWeapon
+        return RangeWeapon(weapon_id, data_manager=data_manager).get_available_ammo()
+
+    @staticmethod
+    def batch_spawn_items(item_data: list[dict], data_manager: DataManager, equip_to_character: int = None):
+        inventory_id = item_data[0].get('inventory') if item_data[0].get('inventory') else None
+
+        item_tuples = [
+            (item['name'], item['type'], item['class'], item['material'],
+             item['quality'], item['endurance'], item['biocode'], item['inventory'])
+            for item in item_data
+        ]
+
+        with data_manager.connection as conn:
+            cursor = conn.cursor()
+            try:
+                last_item_id = data_manager.maxValue('ITEMS', 'id') + 1
+
+                # Пакетная вставка данных в таблицу ITEMS
+                cursor.executemany('''INSERT INTO ITEMS (name, type, class, material, quality, endurance, biocode, inventory)
+                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', item_tuples)
+
+                # Экипируем предметы и вставляем данные о пулях для оружия
+                equip_tuples = []
+                bullet_tuples = []
+
+                if equip_to_character:
+                    from ArbItems import CharacterEquipment
+
+                    for idx, item in enumerate(item_data):
+                        item_id = last_item_id + idx  # Последовательный ID предмета
+                        if item['class'] == 'Оружие':
+                            # Добавляем данные о пулях для оружия в batch
+                            bullets = ItemManager.get_weapon_capacity_static(item['type'], data_manager)
+                            possible_ammo = ItemManager.get_weapon_possible_ammo_static(item['type'], data_manager)
+                            ammo_id = random.choice(possible_ammo) if possible_ammo else None
+                            bullet_tuples.append((item_id, bullets, ammo_id))
+
+                            # Экипируем оружие на персонажа
+                            equip_tuples.append((equip_to_character, item_id))
+
+                        elif item['class'] == 'Одежда':
+                            # Экипируем одежду на персонажа
+                            equip_tuples.append((equip_to_character, item_id))
+
+                # Пакетная вставка данных в таблицу ITEMS_BULLETS
+                if bullet_tuples:
+                    cursor.executemany('''INSERT INTO ITEMS_BULLETS (id, bullets, ammo_id) VALUES (?, ?, ?)''',
+                                       bullet_tuples)
+
+                # Пакетная вставка данных в таблицу CHARS_EQUIPMENT
+                if equip_tuples:
+                    cursor.executemany('''INSERT INTO CHARS_EQUIPMENT (id, item_id) VALUES (?, ?)''', equip_tuples)
+
+                conn.commit()
+
+            except Exception as e:
+                conn.rollback()
+                data_manager.logger.error(f"Error during batch insertion: {e}")
+                raise
+            finally:
+                cursor.close()
+
+        return inventory_id
+
     def spawn_item(self, equip_to_character: int = None):
         from ArbItems import CharacterEquipment, Item
 
@@ -151,7 +241,6 @@ class ItemManager:
         self.data_manager.insert('ITEMS', query)
 
         if self.item_class == 'Оружие':
-
             mag_query = {
                 'id': item_id,
                 'bullets': self.get_weapon_capacity(),
@@ -160,12 +249,28 @@ class ItemManager:
 
             self.data_manager.insert('ITEMS_BULLETS', mag_query)
 
+            if equip_to_character:
+                character_equipment = CharacterEquipment(equip_to_character, data_manager=self.data_manager)
+                character_equipment.equip_weapon(item_id)
+
         if self.item_class == 'Одежда' and equip_to_character:
             character_equipment = CharacterEquipment(equip_to_character, data_manager=self.data_manager)
             character_equipment.equip_cloth(item_id)
 
         return Item(item_id, data_manager=self.data_manager)
 
+    def to_dict(self):
+        query = {
+            'name': self.item_label,
+            'type': self.item_type,
+            'class': self.item_class,
+            'material': self.material,
+            'quality': self.quality,
+            'endurance': self.endurance,
+            'biocode': self.biocode,
+            'inventory': self.inventory_id
+        }
+        return query
 
 
 
@@ -220,6 +325,521 @@ def create_inventory(label:str=None, owner:int=None, type:str=None, **kwargs):
 
     return c_id
 
+
+
+class SkillTemplate:
+    def __init__(self, skill_id:str, lvl:int, talent:float=1, mastery:float=0):
+        self.skill_id = skill_id
+        self.lvl = lvl
+        self.talent = talent
+        self.mastery = mastery
+
+    def to_text(self):
+        return f'AddSkill("{self.skill_id}", {self.lvl}, {self.talent}, {self.mastery})'
+
+    def to_dict(self, character_id:int=None):
+        return {
+            'id': character_id,
+            'skill_id': self.skill_id,
+            'lvl': self.lvl,
+            'talant': self.talent,
+            'master': self.mastery
+        }
+
+    def save_to_db(self, character_id:int, data_manager:DataManager = None):
+        skill_data = self.to_dict(character_id)
+        db = data_manager if data_manager else DataManager()
+        db.insert('CHARS_SKILLS', skill_data)
+
+    @staticmethod
+    def generate_level(danger_level: int, mastery:float=1) -> int:
+        # Уровень навыка основан на уровне опасности: чем выше опасность, тем выше уровень
+        max_level = int(100 * mastery)
+        return random.randint(min(max_level, 1 + danger_level*5), max_level)
+
+    @staticmethod
+    def generate_talent(danger_level: int) -> float:
+        # Талант основан на уровне опасности: чем выше опасность, тем выше талант
+        return round(random.uniform(0.5, 1.0 + danger_level * 0.1), 2)
+
+    @staticmethod
+    def generate_mastery(danger_level: int) -> float:
+        # Мастерство основано на уровне опасности: чем выше опасность, тем выше мастерство
+        return round(random.uniform(0.5, 1.0 + danger_level * 0.1), 2)
+
+
+    @classmethod
+    def generate_skill(cls, danger:int=0, skill_id:str=None, banned_skills:list[str]=None, data_manager:DataManager=None, total_skills:str=None):
+        db = data_manager if data_manager else DataManager()
+
+        if not banned_skills:
+            banned_skills = []
+        else:
+            banned_skills = banned_skills
+
+        total_skills = total_skills if total_skills else [skill.get("id") for skill in db.select_dict('SKILL_INIT')]
+        for skill in banned_skills:
+            if skill in total_skills:
+                total_skills.remove(skill)
+
+        skill_id = skill_id if skill_id and skill_id not in banned_skills else random.choice(total_skills)
+        mastery = SkillTemplate.generate_mastery(danger)
+        talent = SkillTemplate.generate_talent(danger)
+        lvl = SkillTemplate.generate_level(danger, mastery)
+
+        return SkillTemplate(skill_id, lvl, talent, mastery)
+
+    @staticmethod
+    def generate_skills(danger: int = 0, data_manager: DataManager = None):
+        db = data_manager if data_manager else DataManager()
+
+        skill_amount = 3 + danger // 2
+        all_skills = [skill.get("id") for skill in db.select_dict('SKILL_INIT')]
+
+        generated_skills = []
+        total_skills = []
+        for _ in range(skill_amount):
+            new_skill = SkillTemplate.generate_skill(danger, data_manager=db, banned_skills=generated_skills, total_skills=all_skills)
+            generated_skills.append(new_skill.skill_id)
+            total_skills.append(new_skill)
+
+        return total_skills
+
+    @classmethod
+    def import_from_text(cls, text:str):
+        # Parse skill data from text and create SkillTemplate objects
+        # Example text: AddSkill("Close Combat", 1, 0.8, 0.75)
+        skill_data = re.findall(r'AddSkill\("(.*?)", (\d+), ([\d\.]+), ([\d\.]+)\)', text)
+
+        return [SkillTemplate(skill_id, int(lvl), float(talent), float(mastery)) for skill_id, lvl, talent, mastery in skill_data]
+
+
+class BasicTemplate:
+    def __init__(self,
+                 race_id:str='Human',
+                 owner_id:int=None,
+                 name:str=None,
+                 callsign:str=None,
+                 gender:str=None,
+                 age:int=None,
+                 org_id:str=None,
+                 org_lvl:int=None,
+                 org_rank:str=None,
+                 faction:str=None,
+                 faction_lvl:int=None,
+                 picture:str=None,
+                 server_id:int=None,
+                 budget:int=None,
+                 danger:int=0,
+                 data_manager: DataManager=None):
+
+        self.data_manager = data_manager if data_manager else DataManager()
+        self.race = race_id
+        self.sex = gender if gender else self.generate_gender(self.race, self.data_manager)
+        self.name = name if name else self.generate_name(self.race, self.sex, self.data_manager)
+        self.age = age if age else self.generate_age(self.race, self.data_manager)
+        self.callsign = callsign if callsign else self.generate_callsign(self.name, self.age, self.data_manager)
+
+        self.org = org_id if org_id else 'Civil'
+        self.org_lvl = org_rank if org_rank else self.generate_rank(self.org, org_lvl, self.data_manager)
+        self.frac = faction
+        self.frac_lvl = faction_lvl
+
+        self.avatar = picture
+        self.server_id = server_id
+        self.budget = budget if budget else self.generate_budget(danger)
+        self.owner_id = owner_id
+
+    @staticmethod
+    def generate_budget(danger:int=0):
+        return round(random.uniform(10000, 100000) * (1 + danger * 0.1), 2)
+
+    @staticmethod
+    def generate_callsign(name:str, age:int=None, data_manager:DataManager = None):
+        db = data_manager if data_manager else data_manager
+
+        return None
+
+    @staticmethod
+    def generate_age(race_id:str, data_manager: DataManager = None) -> int:
+        db = data_manager if data_manager else DataManager()
+        min_age, max_age = db.select_dict('RACES_INIT', filter=f'id = "{race_id}"')[0]['age_range'].split('-')
+        return random.randint(int(min_age), int(max_age))
+
+    @staticmethod
+    def check_org_existance(org_id:str, data_manager: DataManager =None) -> bool:
+        db = data_manager if data_manager else DataManager()
+        org_ids = [org.get('id') for org in db.select_dict('ORG_INIT')]
+        return org_id in org_ids
+
+    @staticmethod
+    def generate_rank(org_id:str, org_lvl:int=0, data_manager: DataManager = None) -> str:
+        from ArbOrgs import Organization
+        db = data_manager if data_manager else DataManager()
+        org = Organization(org_id, data_manager=db)
+
+        if org_lvl:
+            return org.get_lvl_rank(org_lvl)
+        else:
+            return org.get_random_lowest_rank()
+
+    @staticmethod
+    def generate_name(race_id:str, gender:str, data_manager:DataManager=None):
+        from ArbRaces import Race
+        db = data_manager if data_manager else DataManager()
+
+        race = Race(race_id, data_manager=db)
+        if race.is_robot:
+            return NameGenerator('robot')
+        elif race.is_primitive:
+            return NameGenerator(gender)
+        else:
+            return NameGenerator(gender, with_surname=True)
+
+    @staticmethod
+    def generate_gender(race_id:str, data_manager:DataManager = None) -> str:
+        from ArbRaces import Race
+        db = data_manager if data_manager else DataManager()
+
+        race = Race(race_id, data_manager=db)
+
+        if race.is_robot:
+            return 'Робот'
+        else:
+            return random.choice(['Мужской', 'Женский'])
+
+    def to_text(self):
+        total_info = self.to_dict()
+        total_text = ''
+        for key, value in total_info.items():
+            total_text += f'set{key.capitalize()} - {value}\n' if value else ''
+
+        return total_text
+
+    @classmethod
+    def import_from_text(cls, text: str, data_manager: Optional[DataManager] = None):
+        # Create a dictionary from the text
+        print(text)
+        data = {}
+        for line in text.strip().split('\n'):
+            if line.startswith('set'):
+                key, value = re.split(r' - ', line[3:], 1)
+                data[key.lower()] = value
+
+        # Create a BasicTemplate instance from the extracted data
+        pprint.pprint(data)
+
+        return cls(
+            race_id=data.get('race', 'Human'),
+            name=data.get('name'),
+            callsign=data.get('callsign'),
+            gender=data.get('sex'),
+            age=int(data.get('age')) if data.get('age') else None,
+            org_id=data.get('org'),
+            org_lvl=data.get('org_lvl') if data.get('org_lvl') else None,
+            org_rank=data.get('org_rank') if data.get('org_rank') else None,
+            faction=data.get('frac'),
+            faction_lvl=int(data.get('frac_lvl')) if data.get('frac_lvl') else None,
+            picture=data.get('avatar'),
+            server_id=int(data.get('server')) if data.get('server') else None,
+            data_manager=data_manager,
+            budget=float(data.get('money')) if data.get('money') else None,
+            owner_id=int(data.get('owner_id')) if data.get('owner_id') else None
+        )
+
+    def to_dict(self, character_id:int=None):
+        return {
+            'id': character_id,
+            'owner': self.owner_id,
+            'name': self.name,
+            'callsign': self.callsign,
+            'age': self.age,
+            'race': self.race,
+            'sex': self.sex,
+            'org': self.org,
+            'org_lvl': self.org_lvl,
+            'frac': self.frac,
+            'frac_lvl': self.frac_lvl,
+            'avatar': self.avatar,
+            'updated': datetime.datetime.now().date().strftime('%Y-%m-%d'),
+            'server': self.server_id,
+            'money': self.budget
+        }
+
+    def save_to_db(self, character_id:int, data_manager:DataManager = None):
+        skill_data = self.to_dict(character_id)
+        db = data_manager if data_manager else DataManager()
+        db.insert('CHARS_INIT', skill_data)
+
+
+class ItemTemplate:
+    def __init__(self,
+                 item_type:str,
+                 material_id:str=None,
+                 quality:str=None,
+                 endurance:int=None,
+                 biocode:int=None):
+        self.item_type = item_type
+        self.material = material_id if material_id else None
+        self.quality = quality if quality else None
+        self.endurance = endurance if endurance else None
+        self.biocode = biocode if biocode else None
+
+    def to_text(self):
+        # Форматируем данные в указанный формат
+        components = [
+            f"mat:{self.material}" if self.material else "",
+            f"q:{self.quality}" if self.quality else "",
+            f"e:{self.endurance}" if self.endurance else "",
+            f"bc:{self.biocode}" if self.biocode is not None else ""
+        ]
+        components_str = ','.join(filter(None, components))
+        return f"AddItem.{self.item_type}({components_str})"
+
+    @classmethod
+    def from_text(cls, text: str):
+        # Разбираем текстовый формат обратно в объект ItemTemplate
+        import re
+        match = re.match(r"AddItem\.(.*?)\((.*?)\)", text)
+        if not match:
+            raise ValueError("Invalid text format for ItemTemplate")
+
+        item_type = match.group(1)
+        components = match.group(2).split(',')
+        data = dict(component.split(':', 1) for component in components if ':' in component)
+
+        return cls(
+            item_type=item_type,
+            material_id=data.get('mat') if data.get('mat') else None,
+            quality=data.get('q') if data.get('q') else None,
+            endurance=int(data.get('e')) if data.get('e') else None,
+            biocode=int(data.get('bc')) if 'bc' in data else None
+        )
+
+    @classmethod
+    def list_from_text(cls, text: str) -> List['ItemTemplate']:
+        # Регулярное выражение для поиска паттернов AddItem.<item_type>(<components>)
+        pattern = r"AddItem\.(.*?)\((.*?)\)"
+        matches = re.findall(pattern, text)
+
+        items = []
+        for item_type, components in matches:
+            # Создание текста для конструктора ItemTemplate
+            item_text = f"AddItem.{item_type}({components})"
+            try:
+                item = cls.from_text(item_text)
+                items.append(item)
+            except ValueError as e:
+                print(f"Error parsing item from text: {e}")
+
+        return items
+
+    def save_to_db(self, character_id:int, data_manager: DataManager = None, equip:bool=False):
+        from ArbItems import Inventory
+        db = data_manager if data_manager else DataManager()
+        inventory = Inventory.get_inventory_by_character(character_id, data_manager=db)
+        new_item = ItemManager(self.item_type, material=self.material, quality=self.quality, endurance=self.endurance, biocode=self.biocode, inventory=inventory.inventory_id, data_manager=db).spawn_item(character_id if equip else None)
+
+        return new_item.item_id
+
+    def to_query(self, inventory_id:int, data_manager: DataManager = None):
+        db = data_manager if data_manager else DataManager()
+        query = ItemManager(self.item_type, material=self.material, quality=self.quality, endurance=self.endurance,
+                               biocode=self.biocode, inventory=inventory_id, data_manager=db).to_dict()
+
+        return query
+
+    @staticmethod
+    def list_to_query(character_id:int, items:list['ItemTemplate'], data_manager: DataManager = None):
+        from ArbItems import Inventory
+        db = data_manager if data_manager else DataManager()
+        inventory_id = Inventory.get_inventory_by_character(character_id, data_manager=db).inventory_id
+        items_query = []
+        for item in items:
+            items_query.append(item.to_query(inventory_id, db))
+
+        return items_query
+
+    @staticmethod
+    def save_list_to_db(character_id:int, items: list['ItemTemplate'], data_manager: DataManager = None, equip:bool=False):
+        from ArbItems import Inventory
+        db = data_manager if data_manager else DataManager()
+        inventory = Inventory.get_inventory_by_character(character_id, data_manager=db)
+        for item in items:
+            ItemManager(item.item_type, material=item.material, quality=item.quality, endurance=item.endurance, biocode=item.biocode, inventory=inventory.inventory_id, data_manager=db).spawn_item(character_id if equip else None)
+
+    @staticmethod
+    def get_min_tier(danger:int=0):
+        danger_tier = {
+            -1: 0,
+            0: 0,
+            1: 0,
+            2: 0,
+            3: 0,
+            4: 1,
+            5: 1,
+            6: 1,
+            7: 2,
+            8: 2,
+            9: 2,
+            10: 3
+        }
+        return danger_tier.get(danger, 0)
+
+    @staticmethod
+    def get_max_tier(danger:int=0):
+        danger_tier = {
+            -1: 0,
+            0: 1,
+            1: 1,
+            2: 1,
+            3: 1,
+            4: 2,
+            5: 2,
+            6: 3,
+            7: 3,
+            8: 3,
+            9: 4,
+            10: 4
+        }
+        return danger_tier.get(danger, danger)
+
+    @staticmethod
+    def get_available_slots(race_id:str, data_manager:DataManager = None):
+        db = data_manager if data_manager else DataManager()
+        from ArbRaces import Race
+        slots = Race(race_id, data_manager=db).get_equipment_slots()
+        return slots
+
+    @staticmethod
+    def get_available_slot_clothes(race_id:str, danger:int=0, budget:int=30_000, data_manager:DataManager = None):
+        db = data_manager if data_manager else DataManager()
+        min_tier = ItemTemplate.get_min_tier(danger)
+        max_tier = ItemTemplate.get_max_tier(danger)
+
+        available_clothes = {}
+        for slot in ItemTemplate.get_available_slots(race_id, data_manager=db):
+            available_clothes[slot] = [(cloth.get('id'), cloth.get('layer')) for cloth in db.select_dict('CLOTHES',
+                                                                     filter=f'slot = "{slot}" AND tier >= {min_tier} AND tier <= {max_tier} AND cost <= {budget}')]
+
+        return available_clothes
+
+    @staticmethod
+    def clear_items_by_layer(items: List[tuple], layer: int) -> List[tuple]:
+        return [item for item in items if item[1] != layer]
+
+    @staticmethod
+    def generate_clothes(race_id: str, danger: int = 0, budget: int = 30_000, data_manager: DataManager = None) -> List[str]:
+        db = data_manager if data_manager else DataManager()
+        total_slots = ItemTemplate.get_available_slot_clothes(race_id, danger, budget, db)
+        total_items = []
+        for slot, potential_clothes in total_slots.items():
+            while potential_clothes:
+                cloth = random.choice(potential_clothes)
+                total_items.append(cloth[0])
+                potential_clothes = ItemTemplate.clear_items_by_layer(potential_clothes, cloth[1])
+        return total_items
+
+    @staticmethod
+    def get_available_weapons(skills:list[SkillTemplate], danger:int=0, budget:int=30_000, data_manager:DataManager=None):
+        db = data_manager if data_manager else DataManager()
+
+        max_skill = ItemTemplate.get_max_combat_skill(skills, data_manager)
+        min_tier = ItemTemplate.get_min_tier(danger)
+        max_tier = ItemTemplate.get_max_tier(danger)
+
+        if not max_skill:
+            return ['SpecialPistol']
+
+        available_weapons = [weapon.get('id') for weapon in db.select_dict('WEAPONS', filter=f'class = "{max_skill}" AND tier >= {min_tier} AND tier <= {max_tier} AND cost <= {budget}')]
+
+        if not available_weapons:
+            available_weapons.append('CombatKnife')
+            available_weapons.append('HighRatePistol')
+
+        return available_weapons
+
+    @staticmethod
+    def get_max_combat_skill(skills: list[SkillTemplate], data_manager:DataManager=None):
+        db = data_manager if data_manager else DataManager()
+
+        max_skill_lvl = 0
+        max_skill = None
+        for skill in skills:
+            print(skills, skill, skill.skill_id)
+            if skill.skill_id == 'MartialArms':
+                continue
+
+            if db.check('SKILL_INIT', f'id = "{skill.skill_id}" AND (role = "Стрельба" OR role = "Ближний бой")'):
+                if max_skill_lvl < skill.lvl:
+                    max_skill = skill.skill_id
+                    max_skill_lvl = skill.lvl
+
+        return max_skill
+
+    @staticmethod
+    def generate_weapon(skills:list[SkillTemplate], danger:int=0, budget:int=30_000, data_manager:DataManager=None):
+        weapon = random.choice(ItemTemplate.get_available_weapons(skills, danger, budget, data_manager))
+        return weapon
+
+    @classmethod
+    def generate_gears(cls, race_id:str, skills:list[SkillTemplate], danger:int=0, budget:int=30_000, data_manager:DataManager=None):
+        db = data_manager if data_manager else DataManager()
+        weapon = ItemTemplate.generate_weapon(skills, danger, budget, db)
+        clothes = ItemTemplate.generate_clothes(race_id, danger, budget, db)
+        total_items_types = []
+        total_items_types.append(weapon)
+        total_items_types.extend(clothes)
+
+        return [ItemTemplate(item) for item in total_items_types]
+
+    def export_to_text(self):
+        clothes_text = ''.join(f'AddItem.{cloth}()\n' for cloth in self.clothes)
+        weapon_text = f'AddItem.{self.weapon_id}()\n'
+        return clothes_text + weapon_text
+
+
+class WorldviewTemplate:
+    def __init__(self, worldview_id:str, stress_points:int=None):
+        self.worldview = worldview_id
+        self.stress = stress_points
+
+    def save_to_db(self, character_id:int, data_manager: DataManager = None):
+        db = data_manager if data_manager else DataManager()
+        query = {
+            'id': character_id,
+            'worldview': self.worldview,
+            'stress': self.stress
+        }
+        db.insert('CHARS_PSYCHOLOGY', query)
+
+    @staticmethod
+    def get_stress_points() -> int:
+        return random.randint(0, 10)
+
+    @classmethod
+    def generate_worldview(cls, data_manager:DataManager = None) -> 'WorldviewTemplate':
+        db = data_manager if data_manager else DataManager()
+        worldview_ids = [world.get("id") for world in db.select_dict('WORLDVIEW')]
+        stress_points = WorldviewTemplate.get_stress_points()
+        return cls(worldview_id=random.choice(worldview_ids), stress_points=stress_points)
+
+    def export_to_text(self):
+        return f'SetWorldview("{self.worldview}")\nSetStressPoints({self.stress})\n'
+
+    @classmethod
+    def import_from_text(cls, text: str) -> 'WorldviewTemplate':
+        # Используем регулярные выражения для извлечения значений
+        worldview_match = re.search(r'SetWorldview\("(.*?)"\)', text)
+        stress_points_match = re.search(r'SetStressPoints\((\d+)\)', text)
+
+        if not worldview_match:
+            return cls.generate_worldview()
+
+        worldview_id = worldview_match.group(1)
+        stress_points = int(stress_points_match.group(1)) if stress_points_match else None
+
+        return cls(worldview_id=worldview_id, stress_points=stress_points)
 
 
 class BaseCfg:
@@ -301,7 +921,7 @@ class BaseCfg:
             'frac': self.faction,
             'frac_lvl': self.faction_lvl,
             'avatar': self.picture,
-            'update': datetime.datetime.now().date().strftime('%Y-%m-%d'),
+            'updated': datetime.datetime.now().date().strftime('%Y-%m-%d'),
             'server': self.server
         }
 
@@ -371,6 +991,195 @@ class BaseCfg:
 
     def __repr__(self):
         return f'{self.__dict__}'
+
+
+class CharacterTemplate:
+    def __init__(self, danger: int = 0, budget: int = None, server_id: int = None,
+                 race: str = None, org_id: str = None, org_rank: str = None,
+                 org_lvl: int = None, basic_template: BasicTemplate = None,
+                 skills: list[SkillTemplate] = None, items: list[ItemTemplate] = None,
+                 worldview: WorldviewTemplate = None, picture: str = None, data_manager: DataManager = None, name: str = None, age: int = None, callsign: str = None, gender: str = None):
+        self.data_manager = data_manager if data_manager else DataManager()
+
+        self.danger = danger if danger >= 0 else 0
+        self.basic_info = basic_template if basic_template else BasicTemplate(race_id=race if race else 'Human',
+                                                                              gender=gender,
+                                                                              org_id=org_id if org_id else 'Civil',
+                                                                              org_rank=org_rank if org_rank else None,
+                                                                              org_lvl=org_lvl if org_lvl else 0,
+                                                                              server_id=server_id,
+                                                                              danger=danger,
+                                                                              picture=picture if picture else None,
+                                                                              name=name if name else None,
+                                                                              age=age if age else None,
+                                                                              callsign=callsign if callsign else None,
+                                                                              data_manager=self.data_manager)
+        self.worldview = worldview if worldview else WorldviewTemplate.generate_worldview(self.data_manager)
+        self.skills = skills if skills else SkillTemplate.generate_skills(danger, self.data_manager)
+        budget = budget if budget else round(random.uniform(30000, 100000) * (1 + danger * 0.1), 2)
+        self.items = items if items else ItemTemplate.generate_gears(self.basic_info.race, self.skills, self.danger,
+                                                                     budget, self.data_manager)
+
+    def insert_data(self) -> int:
+        character_id = self.data_manager.maxValue('CHARS_INIT', 'id') + 1
+        self.basic_info.save_to_db(character_id, self.data_manager)
+        self.worldview.save_to_db(character_id, self.data_manager)
+        for skill in self.skills:
+            skill.save_to_db(character_id, self.data_manager)
+
+        items_queries = ItemTemplate.list_to_query(character_id, self.items, data_manager=self.data_manager)
+        ItemManager.batch_spawn_items(items_queries, self.data_manager, character_id)
+        self.set_spawn_location(character_id, self.data_manager)
+
+        return character_id
+
+    @staticmethod
+    def set_spawn_location(character_id:int, data_manager:DataManager = None):
+        from ArbCharacters import Character
+
+        db = data_manager if data_manager else DataManager()
+        Character(character_id, data_manager=db).set_location_on_spawn()
+
+
+    @classmethod
+    def from_text(cls, text: str, danger: int = 0, data_manager: DataManager = None):
+        db = data_manager if data_manager else DataManager()
+        main_info = BasicTemplate.import_from_text(text, db)
+        if not main_info:
+            main_info = None
+        worldview = WorldviewTemplate.import_from_text(text)
+        if not worldview:
+            worldview = None
+        skills = SkillTemplate.import_from_text(text)
+        if not skills:
+            skills = None
+        items = ItemTemplate.list_from_text(text)
+        if not items:
+            items = None
+        return cls(danger,
+                   basic_template=main_info,
+                   skills=skills,
+                   items=items,
+                   worldview=worldview,
+                   data_manager=db)
+
+    def to_text(self) -> str:
+        text = self.basic_info.to_text()
+        text += '\n'
+        text += self.worldview.export_to_text()
+        text += '\n'
+        for skill in self.skills:
+            text += skill.to_text()
+            text += '\n'
+
+        text += '\n'
+        for item in self.items:
+            text += item.to_text()
+            text += '\n'
+
+        return TemplateManager.beauty_wrap(text)
+
+
+class TemplateManager(DataModel):
+    def __init__(self, id:str, data_manager:DataManager=None):
+        self.data_manager = data_manager if data_manager else DataManager()
+        self.id = id
+        
+        DataModel.__init__(self, 'GEN_TEMPLATES', f'id = "{self.id}"')
+        self.label = self.get('label', self.id)
+        self.content = self.get('content')
+        self.content = self.unwrap_content(self.content)
+
+    @classmethod
+    def create_template(cls, template_id:str, label:str, content:str, data_manager:DataManager=None):
+        db = data_manager if data_manager else DataManager()
+
+        query = {
+            'id': template_id,
+            'label': label,
+            'content': TemplateManager.wrap_content(content)
+        }
+        db.insert('GEN_TEMPLATES', query)
+        return cls(template_id, db)
+
+    @staticmethod
+    def wrap_content(text:str):
+        content = text.split('\n')
+        filtered_content = [chunk for chunk in content if chunk]
+        new_content = ';'.join(filtered_content)
+
+        return new_content
+
+    @staticmethod
+    def unwrap_content(text:str):
+        content = text.split('; ')
+        new_content = '\n'.join(content)
+
+        return new_content
+
+    @staticmethod
+    def beauty_wrap(text:str):
+        content = text.split('\n')
+        filtered_content = [chunk for chunk in content if chunk]
+        new_content = ';\n'.join(filtered_content)
+
+        return new_content
+
+    def delete_template(self):
+        self.delete_record()
+
+
+class GroupTemplate(DataModel):
+    def __init__(self, id:str, data_manager:DataManager = None):
+        self.data_manager = data_manager if data_manager else DataManager()
+        self.id = id
+
+        DataModel.__init__(self, 'GROUP_TEMPLATES', f'id = "{self.id}"')
+        self.label = self.get('label', self.id)
+
+    def delete_template(self):
+        self.delete_record()
+        self.data_manager.delete('GROUP_TEMPLATES_CONTENT', filter=f'id = "{self.id}"')
+
+    def get_templates(self):
+        templates = {}
+        if self.data_manager.check('GROUP_TEMPLATES_CONTENT', filter=f'id = "{self.id}"'):
+            records = self.data_manager.select_dict('GROUP_TEMPLATES_CONTENT', filter=f'id = "{self.id}"')
+            for rec in records:
+                if rec.get('template') not in templates:
+                    templates[rec.get('template')] = 0
+                templates[rec.get('template')] += rec.get('value')
+        return templates
+
+    @classmethod
+    def create_template(cls, template_id: str, label: str, data_manager: DataManager = None):
+        db = data_manager if data_manager else DataManager()
+
+        query = {
+            'id': template_id,
+            'label': label
+        }
+        db.insert('GROUP_TEMPLATES', query)
+        return cls(template_id, db)
+
+    def add_gen_temp(self, gen_template_id:str, value:int=1):
+        query = {
+            'id': self.id,
+            'template': gen_template_id,
+            'value': value
+        }
+        self.data_manager.insert('GROUP_TEMPLATES_CONTENT', query)
+
+    def set_gen_temp(self, gen_template_id:str, value:int):
+        templates = self.get_templates()
+        if gen_template_id in templates:
+            if value == 0:
+                self.data_manager.delete('GROUP_TEMPLATES_CONTENT', f'id = "{self.id}" AND template = "{gen_template_id}"')
+                return
+            self.data_manager.update('GROUP_TEMPLATES_CONTENT', {'value': value}, f'id = "{self.id}" AND template = "{gen_template_id}"')
+        else:
+            if value != 0:
+                self.add_gen_temp(gen_template_id, value)
 
 
 class IdentifyCfg:
@@ -768,6 +1577,7 @@ class MemoriesCfg:
     pass
 
 
+
 class GenerateCharacter:
     def __init__(self,
                  danger:int=0,
@@ -792,14 +1602,32 @@ class GenerateCharacter:
         self.relationsCfg = relationsCfg if relationsCfg else RelationsCfg()
         self.groupCfg = groupCfg if groupCfg else GroupCfg()
 
-    def insert_data(self, owner_id:int = None):
+    def insert_data(self, owner_id:int = None, money:float=30_000, skill_points:int=0, skill_mods_points:float=0, lvl:int=0, exp:float=0, location_id:str=None):
+        from ArbOrgs import Organization
+
+
         character_id = self.data_manager.maxValue('CHARS_INIT', 'id') + 1
 
         basic_info = self.basicCfg.to_dict()
         basic_query = {'id': character_id,
-                       'owner': owner_id}
+                       'owner': owner_id,
+                       'money': money}
         basic_query.update(basic_info)
+
+        print(basic_query)
+
         self.data_manager.insert('CHARS_INIT', basic_query)
+
+        combat_query = {'id': character_id,
+                        'ap': 0,
+                        'ap_bonus': 0,
+                        'supressed': None,
+                        'hunted': None,
+                        'ready': None,
+                        'target': None,
+                        'melee_target': None}
+        self.data_manager.insert('CHARS_COMBAT', combat_query)
+
 
         identity_info = self.identifyCfg.to_dict()
         identity_query = {'id': character_id}
@@ -822,6 +1650,26 @@ class GenerateCharacter:
 
         weapon_info = self.weaponCfg.weapon_id
         ItemManager(weapon_info, data_manager=self.data_manager, inventory=inventory).spawn_item(character_id)
+
+        progress_query = {
+            'id': character_id,
+            'skills': skill_points,
+            'skills_mods': skill_mods_points,
+            'lvl': lvl,
+            'exp': exp
+        }
+        self.data_manager.insert('CHARS_PROGRESS', progress_query)
+
+        if not location_id:
+            location_id = Organization(self.basicCfg.org, data_manager=self.data_manager).spawn_point
+
+        location_query = {
+            'id': character_id,
+            'loc_id': location_id,
+            'move_points': 2,
+            'entered': 1
+        }
+        self.data_manager.insert('CHARS_LOC', location_query)
 
         return character_id
 
@@ -852,7 +1700,6 @@ class GenerateCharacter:
         )
 
 
-
 class GenerateObject:
     def __init__(self, object_type: str, battle_id: int, layer_id: int, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
@@ -860,16 +1707,20 @@ class GenerateObject:
         self.battle_id = battle_id
         self.layer_id = layer_id
         self.captured_team_id = kwargs.get('captured', None)
+        self.endurance = kwargs.get('endurance', None)
+        self.uses = kwargs.get('uses', 0)
 
     def get_available_id(self):
-        if self.data_manager.check('BATTLE_OBJECTS', f'object_id'):
-            return self.data_manager.maxValue('BATTLE_OBJECTS', 'object_id') + 1
-        else:
+        objects = self.data_manager.select_dict('BATTLE_OBJECTS')
+        if not objects:
             return 0
+        else:
+            return self.data_manager.maxValue('BATTLE_OBJECTS', 'object_id') + 1
 
     def get_endurance(self):
         if self.data_manager.check('OBJECT_TYPE', f'object_id = "{self.object_type}"'):
-            return self.data_manager.select_dict('OBJECT_TYPE', f'object_id = "{self.object_type}"')[0].get('endurance')
+            print(self.object_type, self.data_manager.select_dict('OBJECT_TYPE', filter=f'object_id = "{self.object_type}"'))
+            return self.data_manager.select_dict('OBJECT_TYPE', filter=f'object_id = "{self.object_type}"')[0].get('endurance')
         else:
             return 0
 
@@ -879,8 +1730,8 @@ class GenerateObject:
             'layer_id': self.layer_id,
             'object_id': self.get_available_id(),
             'object_type': self.object_type,
-            'endurance': self.get_endurance(),
-            'uses': 0,
+            'endurance': self.get_endurance() if not self.endurance else self.endurance,
+            'uses': self.uses if self.uses else 0,
             'captured': self.captured_team_id
         }
 
@@ -890,15 +1741,13 @@ class GenerateObject:
         return f'GenObject.{self.object_type}'
 
 
-
-
 class GenerateLayer:
     def __init__(self, battle_id:int, layer_id:int, terrain_type:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = layer_id
         self.battle_id = battle_id
         self.terrain_type = terrain_type
-        self.label = kwargs.get('label', self.get_terrain_type_label())
+        self.label = kwargs.get('label', self.get_terrain_type_label()) if kwargs.get('label') else self.get_terrain_type_label()
         self.height = kwargs.get('height', 0)
 
         self.num_of_objects = kwargs.get('num_of_objects', random.randint(0, 15))
@@ -906,19 +1755,25 @@ class GenerateLayer:
 
         self.generate_objects()
 
-
     def get_terrain_type_label(self):
         if self.data_manager.check('TERRAIN_TYPE', f'id = "{self.terrain_type}"'):
-            return self.data_manager.select_dict('TERRAIN_TYPE', f'id = "{self.terrain_type}"')[0].get('label')
+            return self.data_manager.select_dict('TERRAIN_TYPE', filter=f'id = "{self.terrain_type}"')[0].get('label')
         else:
             return 'Неизвестная местность'
 
     def get_object_category(self):
-        return self.data_manager.select_dict('TERRAIN_TYPE', filter=f'id = "{self.terrain_type}"')[0].get('object_types')
+        category = self.data_manager.select_dict('TERRAIN_TYPE', filter=f'id = "{self.terrain_type}"')
+        if category:
+            return category[0].get('object_types')
+        else:
+            return 'Хранилище'
 
     def get_available_objects(self):
         object_category = self.get_object_category()
         objects = [obj.get('object_id') for obj in self.data_manager.select_dict('OBJECT_TYPE', filter=f'type = "{object_category}"')]
+        if not objects:
+            return [obj.get('object_id') for obj in self.data_manager.select_dict('OBJECT_TYPE', filter=f'type = "Хранилище"')]
+
         return objects
 
     def add_object(self, genered_object: GenerateObject):
@@ -953,7 +1808,6 @@ class GenerateLayer:
         return f'GenLayer.{self.id}.{self.terrain_type}(objects={self.objects})'
 
 
-
 class GenerateBattle:
     def __init__(self, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
@@ -970,7 +1824,7 @@ class GenerateBattle:
         self.battle_type_value = kwargs.get('battle_type_value', None)
 
         self.terrain_categories = kwargs.get('terrain_categories', [])
-        self.terrain_types = kwargs.get('terrain_types', [])
+        self.terrain_types = kwargs.get('terrain_types', []) if kwargs.get('terrain_types') else []
         if not self.terrain_categories and not self.terrain_types:
             self.terrain_types = self.get_terrain_types('Природный')
 
@@ -1037,6 +1891,8 @@ class GenerateBattle:
                 layer.add_object(object)
 
     def insert_data(self):
+        pprint.pprint(self.__dict__)
+
         query = {
             'id': self.id,
             'label': self.label,
@@ -1108,6 +1964,8 @@ class GenerateTeam:
         self.com_points = kwargs.get('com_points', 0)
         self.round_active = kwargs.get('round_active', 1)
 
+        self.members_activity = kwargs.get('members_activity', None)
+        self.danger = kwargs.get('danger', random.choice([2, 4]))
         self.members_value = kwargs.get('members_value', None)
         self.members_race = kwargs.get('members_race', 'Human')
         self.members_org_id = kwargs.get('members_org', None)
@@ -1122,47 +1980,60 @@ class GenerateTeam:
             return 1
 
     def generate_units(self):
+        from ArbBattle import ActionPoints
+
         if self.members_value:
             for _ in range(self.members_value):
                 print('Создаю персонажа...')
-                new_unit = GenerateCharacter(race=self.members_race, org=self.members_org_id)
-                new_unit.insert_data()
+                basicCfg = BaseCfg(org=self.members_org_id, race=self.members_race)
+
+                new_unit = GenerateCharacter(basicCfg=basicCfg, danger=self.danger, data_manager=self.data_manager)
+                new_unit_id = new_unit.insert_data()
 
                 prompt = {
                     'battle_id': self.battle_id,
-                    'character_id': new_unit.id,
+                    'character_id': new_unit_id,
                     'layer_id': self.members_layer,
                     'object': None,
                     'initiative': random.randint(1, 100),
-                    'is_active': 0,
+                    'is_active': self.members_activity,
                     'height': 0,
                     'team_id': self.id
                 }
 
                 self.data_manager.insert('BATTLE_CHARACTERS', prompt)
+                ActionPoints(ap=0, actor_id=new_unit_id).new_round_ap()
 
         if self.generate_coordinator:
-            new_unit = GenerateCharacter(race=self.members_race, org=self.members_org_id)
-            new_unit.insert_data()
-            self.coordinator = new_unit.id
+            basicCfg = BaseCfg(org=self.members_org_id, race=self.members_race)
+
+            new_unit = GenerateCharacter(basicCfg=basicCfg, danger=self.danger, data_manager=self.data_manager)
+            new_unit_id = new_unit.insert_data()
+
+            self.coordinator = new_unit_id
+            self.data_manager.update('BATTLE_TEAMS', {'coordinator': new_unit_id}, f'team_id = {self.id}')
 
         if self.generate_commander:
-            new_unit = GenerateCharacter(race=self.members_race, org=self.members_org_id)
+            basicCfg = BaseCfg(org=self.members_org_id, race=self.members_race)
+
+            new_unit = GenerateCharacter(basicCfg=basicCfg, danger=self.danger, data_manager=self.data_manager)
             new_unit.insert_data()
-            self.commander = new_unit.id
+            new_unit_id = new_unit.insert_data()
 
             prompt = {
                 'battle_id': self.battle_id,
-                'character_id': new_unit.id,
+                'character_id': new_unit_id,
                 'layer_id': self.members_layer,
                 'object': None,
                 'initiative': random.randint(1, 100),
-                'is_active': 0,
+                'is_active': None,
                 'height': 0,
                 'team_id': self.id
             }
 
             self.data_manager.insert('BATTLE_CHARACTERS', prompt)
+            self.data_manager.update('BATTLE_TEAMS', {'commander':  new_unit_id}, f'team_id = {self.id}')
+            ActionPoints(ap=0, actor_id=new_unit_id).new_round_ap()
 
     def insert_data(self):
         query = {
@@ -1180,6 +2051,67 @@ class GenerateTeam:
 
         self.generate_units()
 
+
+class GenerateGroup:
+    def __init__(self, label:str, owner:int=None, org_id:str=None, units:int=None, danger:int=None, template:str=None, data_manager:DataManager = None):
+        self.data_manager = data_manager if data_manager else DataManager()
+        self.label = label
+        self.owner = owner if owner else None
+        self.org_id = org_id if org_id else None
+        self.template = template if template else None
+
+        self.num_of_units = units if units else random.randint(5, 10)
+        self.danger = danger if danger else random.randint(2, 6)
+
+    def generate_units(self):
+        if self.template is None:
+            total_chars = []
+            for char in range(self.num_of_units):
+                char_template = CharacterTemplate(org_id=self.org_id, danger=self.danger, data_manager=self.data_manager)
+                total_chars.append(char_template)
+            return total_chars
+        else:
+            templates = GroupTemplate(self.template, data_manager=self.data_manager).get_templates()
+            print(templates)
+            total_chars = []
+            for temp, value in templates.items():
+                for _ in range(value):
+                    content = TemplateManager(temp, data_manager=self.data_manager).content
+                    if 'setOrg' in content:
+                        pattern = r'(setOrg\s*-\s*)([^\n]+)'
+                        content = re.sub(pattern, fr'\1{self.org_id}', content)
+                    char_template = CharacterTemplate.from_text(content, danger=self.danger, data_manager=self.data_manager)
+                    total_chars.append(char_template)
+
+            return total_chars
+
+    def insert_data(self):
+        from ArbItems import CharacterEquipment
+        group_id = self.data_manager.maxValue('GROUP_INIT', 'id') + 1
+
+        chars = self.generate_units()
+        chars_ids = []
+        for char in chars:
+            char_id = char.insert_data()
+            CharacterEquipment(char_id, data_manager=self.data_manager).validate_and_fix_equipment()
+            chars_ids.append(char_id)
+        captain = random.choice(chars_ids)
+
+        group_query = {
+            'id': group_id,
+            'label': self.label,
+            'owner_id': self.owner if self.owner else captain
+        }
+        self.data_manager.insert('GROUP_INIT', group_query)
+        for char in chars_ids:
+            query = {
+                'id': char,
+                'group_id': group_id,
+                'role': 'Participant' if char != captain else 'Commander'
+            }
+            self.data_manager.insert('GROUP_CHARS', query)
+
+        return group_id
 
 
 
@@ -1412,6 +2344,3 @@ class GenerateCluster:
                       'transport': None}
 
             self.data_manager.insert('LOC_CONNECTIONS', prompt)
-
-
-

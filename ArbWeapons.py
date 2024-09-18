@@ -68,6 +68,18 @@ class MeleeWeapon(WeaponInit):
         melee_damage = DataList('WEAPON_DAMAGE', f'weapon_id = "{self.weapon_id}"', data_manager=self.data_manager)
         return melee_damage
 
+    def melee_attack(self):
+        damage_info = self.get_melee_damage()
+        damage_list = []
+        for damage in damage_info:
+            crit_mod = damage.get('critical_multiplier', 1) if random.randint(0, 100) >= 100 - damage.get('critical_chance', 1) else 1
+
+            damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod
+            total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration'), damage.get('blocked_type'), self.label, data_manager=self.data_manager)
+
+            damage_list.append(total_damage)
+        return damage_list
+
 
 class Weapon(Item, MeleeWeapon, RangeWeapon):
     def __init__(self, item_id:int, **kwargs):
@@ -259,7 +271,10 @@ class RaceAttack(DataModel):
         self.ap_cost = self.get('ap_cost', 0)
 
     def get_damage_info(self):
-        melee_damage = DataList('RACES_DAMAGE', f'id = "{self.attack_id}"', data_manager=self.data_manager)
+        if self.data_manager.check('RACES_DAMAGE', f'id = "{self.attack_id}"'):
+            melee_damage = DataList('RACES_DAMAGE', f'id = "{self.attack_id}"', data_manager=self.data_manager)
+        else:
+            melee_damage = DataList('IMPLANTS_DAMAGE', f'id = "{self.attack_id}"', data_manager=self.data_manager)
         return melee_damage
 
     def attack_difficulty(self, range: float, cover: float, **kwargs):
@@ -274,7 +289,7 @@ class RaceAttack(DataModel):
         return round(total_difficulty, 2)
 
 
-    def attack(self):
+    def attack(self, **kwargs):
         from ArbRaces import Race
         damage_info = self.get_damage_info()
         damage_list = []
@@ -282,7 +297,7 @@ class RaceAttack(DataModel):
             crit_mod = damage.get('critical_multiplier', 1) if random.randint(0, 100) >= 100 - damage.get(
                 'critical_chance', 1) else 1
 
-            damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod
+            damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod + kwargs.get('damage_bonus', 0)
             total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration'),
                                   damage.get('blocked_type'), f'{Race(self.race, data_manager=self.data_manager).label.lower()} {self.label.lower()}', data_manager=self.data_manager)
 

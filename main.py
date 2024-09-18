@@ -15,7 +15,14 @@ API_KEY = config['token']
 
 @bot.event
 async def on_ready():
-	print("-- Arbiter ready")
+    from ArbCore import Server, Player
+    for guild in bot.guilds:
+        server = Server.register_server_if_not_exist(guild.id)
+        for member in guild.members:
+            server.register_player(member.id)
+            Player.register(member.id)
+
+    print('-- Arbiter ready')
 
 @bot.slash_command(name='test_slash_command', description='Описание команды')
 async def test(ctx):

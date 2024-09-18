@@ -1,3 +1,4 @@
+import asyncio
 import pprint
 
 from ArbDatabase import DataManager
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 import inspect
 from typing import Callable, get_type_hints
 
+
+discord.Color.brand_green()
 
 @dataclass()
 class EmbedRow:
@@ -85,6 +88,9 @@ class ArbEmbed:
 
         if self.footer:
             self.embed.set_footer(text=self.footer, icon_url=self.footer_logo)
+
+    def set_author(self, author_name:str = None, url:str = None, icon_url:str = None):
+        self.embed.set_author(name=author_name, url=url, icon_url=icon_url)
 
     def get_embed(self):
         return self.embed
@@ -457,3 +463,134 @@ class SelectingForm(discord.ui.Select):
         view = discord.ui.View()
         view.add_item(self)
         await self.ctx.respond(view=view)
+
+
+class InviteView(View):
+    def __init__(self, interaction, *, accept_embed=None, accept_label=None, deny_embed=None, deny_label=None, acceptor=None):
+        super().__init__(timeout=None)
+
+        self.interaction = interaction
+
+        self.accept_embed = accept_embed if accept_embed else None
+        self.accept_label = accept_label if accept_label else 'Принять'
+
+        self.deny_embed = deny_embed if deny_embed else None
+        self.deny_label = deny_label if deny_label else 'Отклонить'
+
+        self.acceptor = acceptor if acceptor else self.interaction.user
+
+    @discord.ui.button(label='Принять', style=discord.ButtonStyle.success, custom_id='Accept')
+    async def accept(self, _, interaction: discord.Interaction):
+        await self.respond_accept()
+        await interaction.response.defer()
+        await interaction.delete_original_response()
+
+    @discord.ui.button(label='Отклонить', style=discord.ButtonStyle.danger, custom_id='Deny')
+    async def deny(self, _, interaction: discord.Interaction):
+        await self.respond_deny()
+        await interaction.response.defer()
+        await interaction.delete_original_response()
+
+    async def update_button(self):
+        self.accept.label = self.accept_label
+        self.deny.label = self.deny_label
+
+    async def respond_accept(self):
+        if self.accept_embed:
+            embed = self.accept_embed
+        else:
+            embed = SuccessEmbed('Предложение принято',
+                             '-# Вы приняли предложение!')
+
+        await self.acceptor.send(embed=embed)
+
+    async def respond_deny(self):
+        if self.deny_embed:
+            embed = self.deny_embed
+        else:
+            embed = ErrorEmbed('Предложение отвержено',
+                           '-# Вы отклонили предложение')
+
+        await self.acceptor.send(embed=embed)
+
+
+class Vote:
+    def __init__(self, question:str, options:list[str], allowed_users:list[int], duration:int=5):
+        self.question = question
+        self.options = options
+        self.allowed_users = allowed_users  # Список разрешённых пользователей для голосования
+        self.votes = {option: 0 for option in options}  # Счётчики голосов для каждого варианта
+        self.voted_users = set()  # Множество пользователей, которые уже проголосовали
+        self.duration = duration*60  # Длительность голосования в секундах
+        self.finished = False  # Статус голосования (закончено или нет)
+        self.result = None
+
+    def add_vote(self, user: discord.Interaction.user, option):
+        if user.id in self.allowed_users and user.id not in self.voted_users:
+            self.votes[option] += 1
+            self.voted_users.add(user.id)
+            return True
+        return False
+
+    def get_winner(self):
+        if self.finished:
+            return max(self.votes, key=self.votes.get)
+        return None
+
+    async def start(self, ctx):
+        """Начинает голосование."""
+        players_mentions = []
+        for player in self.allowed_users:
+            players_mentions.append(f'{ctx.bot.get_user(player).mention}')
+
+        content = ', '.join(players_mentions)
+
+        embed = ArbEmbed(title=self.question, desc=f'-# Голосование продлится: {int(self.duration / 60)} мин.\n' + '\n'.join(f'{idx+1}. {option}' for idx, option in enumerate(self.options)))
+        view = VoteView(self)
+        await ctx.respond(content,embed=embed, view=view)
+        await asyncio.sleep(self.duration)  # Задержка до конца голосования
+        self.finished = True
+        self.result = self.get_winner()
+        print('КОНЕЦ:', self.result, self.question, self.voted_users)
+        return self.result
+
+class VoteButton(Button):
+    def __init__(self, label:str, vote:Vote, option:str):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.vote = vote  # Ссылка на объект голосования
+        self.option = option  # Вариант, который привязан к кнопке
+
+    async def callback(self, interaction: discord.Interaction):
+        user = interaction.user
+        if self.vote.add_vote(user, self.option):
+            print(self.vote.votes)
+            await interaction.response.send_message(f"-# Ваш голос за **{self.option}** был учтён!", ephemeral=True)
+        else:
+            await interaction.response.send_message("-# Вы не можете голосовать или уже проголосовали.", ephemeral=True)
+
+class VoteView(View):
+    def __init__(self, vote: Vote):
+        super().__init__(timeout=vote.duration)  # Тайм-аут совпадает с длительностью голосования
+        self.vote = vote
+        for option in vote.options:
+            self.add_item(VoteButton(option, vote, option))
+
+        self.result = None
+
+    async def send_winner_embed(self, winner:str):
+        embed = SuccessEmbed(f'Голосование завершено!',
+                             f'В голосовании **"{self.vote.question}"** победил вариант: **{winner}**')
+        await self.message.edit(content=None, embed=embed, view=None)  # Отправляем эмбед с результатами голосования
+
+    async def send_canceled_embed(self):
+        embed = ErrorEmbed('Голосование отменено',
+                             f'-# Голосование **"{self.vote.question}"** было прервано. Победитель не определён')
+        await self.message.edit(content=None, embed=embed, view=None)  # Отправляем эмбед с результатами голосования
+
+    async def on_timeout(self):
+        self.vote.finished = True  # Отмечаем, что голосование завершено
+        winner = self.vote.get_winner()
+        if winner:
+            await self.send_winner_embed(winner)
+        else:
+            await self.send_canceled_embed()

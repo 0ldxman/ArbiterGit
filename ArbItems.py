@@ -6,6 +6,7 @@ from ArbMaterial import Material
 from ArbQuality import Quality
 from abc import ABC, abstractmethod
 from ArbResponse import Response, ResponsePool
+from dataclasses import dataclass
 
 
 class Item(DataModel):
@@ -72,8 +73,22 @@ class Item(DataModel):
         query = {'endurance': self.endurance}
         self.data_manager.update('ITEMS', query, f'id = {self.item_id}')
 
+        if self.get_endurance() > 1:
+            max_endurance = 1 / self.get_endurance() * self.endurance
+            query = {'endurance': max_endurance}
+            self.endurance = max_endurance
+            self.data_manager.update('ITEMS', query, f'id = {self.item_id}')
+
+    def get_max_endurance(self):
+        current_percent = self.get_endurance()
+        max_endurance = 1 / current_percent * self.endurance
+
+        return max_endurance
+
+
     def delete_item(self):
         self.data_manager.delete('ITEMS', f'id = {self.item_id}')
+        self.data_manager.delete('CHARS_EQUIPMENT', f'item_id = {self.item_id}')
 
     def get_endurance(self):
         if self.item_class == 'Одежда':
@@ -96,6 +111,43 @@ class Item(DataModel):
         material_name = f'{self.material.adjective} ' if self.material else ''
 
         return f'{material_name}{self.label}{quality}{health}'
+
+
+class ItemTranslate:
+    def __init__(self, item_id:str, **kwargs):
+        self.item_id = item_id
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.translation = self.find_label()
+
+    def find_label(self):
+        tables = ['WEAPONS', 'CLOTHES', 'ITEMS_INIT', 'AMMO', 'IMPLANTS_INIT']
+        translation = None
+        for table in tables:
+            if self.data_manager.check(table, f'id = "{self.item_id}"'):
+                translation = self.data_manager.select_dict(table, filter=f'id = "{self.item_id}"')[0].get('name', None)
+                if not translation:
+                    translation = self.data_manager.select_dict(table, filter=f'id = "{self.item_id}"')[0].get('label','Неизвестный предмет')
+                break
+
+        return translation
+
+    @staticmethod
+    def find_id_by_name(name:str, data_manager:DataManager=None):
+        db = data_manager if data_manager else DataManager()
+        tables = ['WEAPONS', 'CLOTHES', 'ITEMS_INIT', 'AMMO', 'IMPLANTS_INIT']
+        translation = None
+        for table in tables:
+            table_columns = db.get_all_columns(table)
+            if 'name' in table_columns:
+                if db.check(table, filter=f'name = "{name}"'):
+                    translation = db.select_dict(table, filter=f'name = "{name}"')[0].get('id', 'Неизвестный предмет')
+                    break
+            elif 'label' in table_columns:
+                if db.check(table, filter=f'label = "{name}"'):
+                    translation = db.select_dict(table, filter=f'label = "{name}"')[0].get('id', 'Неизвестный предмет')
+                    break
+
+        return translation
 
 
 class Inventory(DataModel):
@@ -134,6 +186,14 @@ class Inventory(DataModel):
             if item.item_class == item_class:
                 total_items.append(item)
 
+        return total_items
+
+    def find_component_in_items(self, component:str):
+        items = self.get_items_list()
+        total_items = []
+        for item in items:
+            if component in UsableItem(item).get_components_dict():
+                total_items.append(item)
         return total_items
 
     def get_items_list(self) -> list[Item]:
@@ -214,7 +274,8 @@ class CharacterEquipment:
         slots = {'Оружие': [], 'Одежда': []}
 
         for item in items:
-            slots[item.item_class].append(item)
+            if item.item_class:
+                slots[item.item_class].append(item)
 
         return slots
 
@@ -335,6 +396,35 @@ class CharacterEquipment:
 
         return f'{clothes_string}\n\n{weapon_string}'
 
+    def validate_and_fix_equipment(self) -> None:
+        """Проверяет и устраняет конфликты экипировки у персонажа."""
+        clothes = self.clothes_slots_and_layers()  # Получаем экипированную одежду по слотам и слоям
+        weapons = self.items_slots().get('Оружие', [])  # Получаем экипированное оружие
+
+        # Проверка на несколько предметов в одном слоте и одном слое
+        for slot, layers in clothes.items():
+            # Если в слоте несколько предметов на одном слое, оставляем случайный предмет, остальные убираем
+            unique_layers = set(layers)
+            if len(layers) != len(unique_layers):
+                for layer in unique_layers:
+                    items_on_layer = [item for item in self.clothes()[slot] if
+                                      self.data_manager.select_dict('CLOTHES', filter=f'id = "{item.type}"')[0].get(
+                                          'layer') == layer]
+                    if len(items_on_layer) > 1:
+                        item_to_keep = random.choice(items_on_layer)
+                        items_to_remove = [item for item in items_on_layer if item != item_to_keep]
+
+                        for item in items_to_remove:
+                            self.unequip_item(item.item_id)
+
+        # Проверка на наличие второго оружия
+        if len(weapons) > 1:
+            weapon_to_keep = random.choice(weapons)  # Случайным образом выбираем одно оружие
+            weapons_to_remove = [weapon for weapon in weapons if weapon != weapon_to_keep]
+
+            for weapon in weapons_to_remove:
+                self.unequip_item(weapon.item_id)
+
 
 class ItemComponent(ABC):
     def __init__(self, item: Item):
@@ -378,10 +468,14 @@ class InjuryReduceComponent(ItemComponent):
                 break
 
             injury = random.choice(injuries)
+            if injury.is_scar:
+                injuries.remove(injury)
+                continue
             damage_reduce = random.randint(1, min(damage_points, injury.damage))
             injury.change_damage(-1 * damage_reduce)
             if injury.damage <= 0:
                 injury.delete_record()
+                injuries.remove(injury)
 
             damage_points -= damage_reduce
             print(f'{user_id} снизил повреждение от ранений на {damage_reduce}!')
@@ -490,7 +584,8 @@ class ItemSpawnerComponent(ItemComponent):
         from ArbGenerator import ItemManager
 
         for _ in range(self.count):
-            spawned_item = ItemManager(self.item_type, data_manager=self.item.data_manager).spawn_item(user_id)
+            inventory_id = Inventory.get_inventory_by_character(user_id)
+            spawned_item = ItemManager(self.item_type, data_manager=self.item.data_manager, inventory=inventory_id.inventory_id).spawn_item()
             print(f'{spawned_item.label} ({spawned_item.item_id}) создано для персонажа {user_id}!')
 
             return Response(True, f'*Вы создали {spawned_item.label} при помощи {self.item.label}*',
@@ -528,6 +623,7 @@ class ResurrectionComponent(ItemComponent):
 
     def use(self, user_id: int, **kwargs):
         from ArbHealth import Body
+        from ArbCharacters import Character
 
         body = Body(user_id, data_manager=self.item.data_manager)
         injuries_list = body.get_injuries_list()
@@ -537,7 +633,7 @@ class ResurrectionComponent(ItemComponent):
             i.delete_record()
 
         print(f'Персонаж {user_id} был воскрешен!')
-        return Response(True, f'*Персонаж был воскрешен при помощи {self.item.label}*', 'Воскрешение!')
+        return Response(True, f'*{Character(user_id).name} был воскрешен при помощи {self.item.label}*', 'Воскрешение!')
 
 
 class RepairComponent(ItemComponent):
@@ -546,30 +642,42 @@ class RepairComponent(ItemComponent):
         self.repair_efficiency = repair_efficiency
 
     def use(self, user_id:int, **kwargs):
-        clothes = CharacterEquipment(user_id, data_manager=self.item.data_manager).items_slots().get('Одежда', [])
+        all_items = Inventory.get_inventory_by_character(user_id).get_items_list()
+        for item in all_items:
+            if item.item_id == self.item.item_id:
+                all_items.remove(item)
+
+        need_to_repair_clothes = [cloth for cloth in all_items if cloth.get_endurance() < 1]
 
         cloth_to_repair = Item(kwargs.get('clothes_id'), data_manager=self.item.data_manager) if kwargs.get('clothes_id') is not None else None
         if cloth_to_repair is None:
-            cloth_to_repair = random.choice(clothes)
+            cloth_to_repair = random.choice(need_to_repair_clothes)
 
         cloth_to_repair.change_endurance(self.repair_efficiency)
 
         return Response(True, f'*Вы отремонтировали {cloth_to_repair.label} при помощи {self.item.label}*', 'Ремонт')
 
 
-class SkipCycleComponent(ItemComponent):
-    def __init__(self, item: Item, rest_efficiency: float):
-        super().__init__(item)
-        self.rest_efficiency = rest_efficiency
+# class SkipCycleComponent(ItemComponent):
+#     def __init__(self, item: Item, rest_efficiency: float):
+#         super().__init__(item)
+#         self.rest_efficiency = rest_efficiency
+#
+#     def use(self, user_id:int, **kwargs):
+#         from ArbCharacters import Character
+#
+#         rest = Character(user_id, data_manager=self.item.data_manager).change_cycle(1, max_cycles=3, rest_efficiency=self.rest_efficiency)
+#         print(f'Персонаж {user_id} отдыхает при помощи {self.item.label}')
+#
+#         return Response(True, f'*Вы немного отдохнули при помощи {self.item.label}...*', 'Отдых')
 
-    def use(self, user_id:int, **kwargs):
-        from ArbCharacters import Character
 
-        rest = Character(user_id, data_manager=self.item.data_manager).change_cycle(1, max_cycles=3, rest_efficiency=self.rest_efficiency)
-        print(f'Персонаж {user_id} отдыхает при помощи {self.item.label}')
-
-        return Response(True, f'*Вы немного отдохнули при помощи {self.item.label}...*', 'Отдых')
-
+@dataclass
+class ItemEffects:
+    effect_type: str
+    value: str | int | float
+    count: int | None = None
+    chance: int | None = None
 
 class UsableItem:
     def __init__(self, item: Item, added_components: list = None):
@@ -580,6 +688,18 @@ class UsableItem:
 
     def add_component(self, component: ItemComponent):
         self.components.append(component)
+
+    def get_components_dict(self):
+        total_comps = {}
+
+        if not self.item.data_manager.check('ITEMS_EFFECTS', f'item_id = "{self.item.type}"'):
+            return total_comps
+
+        effects = self.item.data_manager.select_dict('ITEMS_EFFECTS', filter=f'item_id = "{self.item.type}"')
+        for effect in effects:
+            total_comps[effect.get("effect_type")] = ItemEffects(effect.get("effect_type"), effect.get("value"), effect.get("count"), effect.get("chance"))
+
+        return total_comps
 
     def get_all_comonents(self):
         if not self.item.data_manager.check('ITEMS_EFFECTS', f'item_id = "{self.item.type}"'):
@@ -612,8 +732,8 @@ class UsableItem:
                 comp = ResurrectionComponent(self.item)
             elif component_type == 'Repair':
                 comp = RepairComponent(self.item, component_value)
-            elif component_type == 'SkipCycle':
-                comp = SkipCycleComponent(self.item, component_value)
+            # elif component_type == 'SkipCycle':
+            #     comp = SkipCycleComponent(self.item, component_value)
             elif component_type == 'Usable':
                 comp = UsableComponent(self.item, component_value)
             else:
@@ -634,5 +754,3 @@ class UsableItem:
 # TODO: Добавить проверку возможности коммуникации исходя из предметов инвентаря (наличие рации, КПК, Нотбука)
 
 # print(UsableItem(Item(2004)).use(1))
-
-

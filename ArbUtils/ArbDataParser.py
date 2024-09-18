@@ -66,6 +66,15 @@ def process_string(input_string):
   processed_words = [word.strip().title() for word in words]
   return processed_words
 
+def proccess_tasks(input_string, delimiter=','):
+    # Разбиваем строку по заданному разделителю
+    elements = input_string.split(delimiter)
+
+    # Удаляем лишние пробелы в каждом элементе
+    cleaned_elements = [element for element in elements]
+
+    return cleaned_elements
+
 
 def string_to_list(input_string, delimiter=','):
     # Разбиваем строку по заданному разделителю

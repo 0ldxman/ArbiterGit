@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from typing import Dict, Any
+
 from ArbDatabase import DataManager, DataModel, DataDict
 
 
@@ -14,6 +16,29 @@ class Sound(DataModel):
         self.detect_chance = self.get('detect_chance', 0)
         self.description = self.get('desc', 'Неизвестный звук')
 
+    @staticmethod
+    def create_sound(character_id:int, sound_type:str, volume:int=None, content:str=None):
+        db = DataManager()
+        if not db.check('BATTLE_CHARACTERS', f'character_id = {character_id}'):
+            return None
+
+        battle_data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {character_id}')[0]
+        battle_id = battle_data.get('battle_id')
+        layer_id = battle_data.get('layer_id')
+
+        sound_id = db.maxValue('BATTLE_SOUNDS', 'id') + 1
+
+        query = {
+            'id': sound_id,
+            'battle_id': battle_id,
+            'layer_id': layer_id,
+            'actor_id': character_id,
+            'sound_id': sound_type,
+            'volume': volume,
+            'content': content,
+        }
+        db.insert('BATTLE_SOUNDS', query)
+
 
 class InBattleSound(Sound):
     def __init__(self, id:int, **kwargs):
@@ -28,6 +53,10 @@ class InBattleSound(Sound):
         self.content = data.get('content', '')
 
         super().__init__(self.sound_type, data_manager=self.data_manager)
+
+    def update_record(self, data: Dict[str, Any]):
+        model = DataModel('BATTLE_SOUNDS', f'id = {self.id}')
+        model.update_record(data)
 
     def delete(self):
         self.data_manager.delete('BATTLE_SOUNDS',f'id = {self.id}')

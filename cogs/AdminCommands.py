@@ -945,7 +945,7 @@ class AdminCommands(commands.Cog):
     async def force_battle_end(self, ctx, battle_id:int):
         pass
 
-    @battle_com.command(name='next_turn')
+    @battle_com.command(name='следующий-ход')
     @commands.has_permissions(administrator=True)
     async def next_turn(self, ctx, battle_id: discord.Option(int)):
         try:
@@ -994,6 +994,7 @@ class AdminCommands(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def manage_unit_combat(self, ctx, character_id:int):
         pass
+
 
 
 def setup(bot):

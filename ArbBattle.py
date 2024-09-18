@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from ArbDatabase import DataManager, DataModel, DataDict
 from ArbEventManager import Event, EventHandler, EventManager
 from ArbHealth import Body, BodyElement
-from ArbSkills import Skill
+from ArbSkills import Skill, SkillInit
 from ArbSounds import InBattleSound
 from ArbItems import CharacterEquipment, Inventory
 from ArbDamage import Damage
 from abc import ABC, abstractmethod
-from ArbResponse import Response, ResponsePool
+from ArbResponse import Response, ResponsePool, RespondLog, RespondIcon, Notification
 from ArbItems import Item
 
 from functools import wraps
@@ -305,7 +305,7 @@ class GameObject(DataModel):
 
     def edit(self, object_type: str=None, endurance: int=None, uses:int=None, captured:int=None):
         prompt = {
-            'object_type': object_type if object_type else self.id,
+            'object_type': object_type if object_type else self.object_type.object_id,
             'endurance': endurance if endurance is not None else self.current_endurance,
             'uses': uses if uses is not None else self.uses,
             'captured': captured if captured is not None else self.captured
@@ -323,6 +323,9 @@ class GameObject(DataModel):
 
     def __repr__(self):
         return f'Object.{self.id}.{self.object_type.object_id} ({self.current_endurance}/{self.object_type.max_endurance}DP)'
+
+    def __str__(self):
+        return f'{self.object_type.label} ({self.id})'
 
 
 
@@ -352,7 +355,7 @@ class BattleTeam(DataModel):
         self.commander_id = self.get('commander', None)
         self.coordinator_id = self.get('coordinator', None)
         self.command_points = self.get('com_points', 0)
-        self.is_active = self.get('round_activity')
+        self.is_active = self.get('round_active')
         self.winpoints = self.get('win_points', 0) if self.get('win_points', None) is not None else 0
 
     @classmethod
@@ -368,12 +371,25 @@ class BattleTeam(DataModel):
         db = kwargs.get('data_manager', DataManager())
         team = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
         dead_team = db.select_dict('BATTLE_DEAD', filter=f'character_id = {actor_id}')
+
         if team:
+            if not team[0].get('team_id'):
+                return None
             return BattleTeam(team[0].get('team_id'), data_manager=db)
         elif dead_team:
+            if not team[0].get('team_id'):
+                return None
             return BattleTeam(dead_team[0].get('team_id'), data_manager=db)
         else:
             return None
+
+    def delete_team(self):
+        members = self.fetch_members()
+        for member in members:
+            self.data_manager.update('BATTLE_CHARACTERS', {'team_id': None}, f'character_id = {member}')
+            self.data_manager.update('BATTLE_DEAD', {'team_id': None}, f'character_id = {member}')
+
+        self.delete_record()
 
     def add_win_points(self, wp:int):
         """
@@ -424,14 +440,14 @@ class BattleTeam(DataModel):
         return self.data_manager.get_count('BATTLE_CHARACTERS','character_id',f'team_id = {self.id} AND battle_id = {self.battle_id}')
 
     def fetch_members(self) -> list[int]:
-        if self.data_manager.check('BATTLE_CHARACTERS', f'team_id = {self.id} AND battle_id = {self.battle_id}'):
-            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id} AND battle_id = {self.battle_id}')]
+        if self.data_manager.check('BATTLE_CHARACTERS', f'team_id = {self.id}'):
+            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id} ')]
         else:
             return []
 
     def get_dead_members(self) -> list[int]:
-        if self.data_manager.check('BATTLE_DEAD', f'team_id = {self.id} AND battle_id = {self.battle_id}'):
-            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'team_id = {self.id} AND battle_id = {self.battle_id}')]
+        if self.data_manager.check('BATTLE_DEAD', f'team_id = {self.id}'):
+            return [member.get('character_id') for member in self.data_manager.select_dict('BATTLE_DEAD', filter=f'team_id = {self.id}')]
         else:
             return []
 
@@ -463,7 +479,7 @@ class BattleTeam(DataModel):
 
     def count_casulties(self):
         if self.data_manager.check('BATTLE_DEAD', f'team_id = {self.id}'):
-            return self.data_manager.get_count('BATTLE_DEAD', 'character_id', f'team_id = {self.id} AND battle_id = {self.id}')
+            return self.data_manager.get_count('BATTLE_DEAD', 'character_id', f'team_id = {self.id}')
         else:
             return 0
 
@@ -473,7 +489,7 @@ class BattleTeam(DataModel):
 
         total_value = dead + participants
 
-        return round(dead / total_value, 2)
+        return round(dead / total_value, 2) if participants else 0
 
 
 
@@ -537,7 +553,7 @@ class Coordinator(DataModel):
                 if 'value' in kwargs:
                     return method(self, *args, **kwargs, value=value)
                 else:
-                    return method(self, *args, **kwargs)
+                    return method(self, *args, **kwargs, value=value)
 
             return wrapper
 
@@ -621,6 +637,22 @@ class Coordinator(DataModel):
     def describe_action(self, action:str, layer_id:int=None):
         return f'-# Вы {action} в обозначенном секторе **{self.battle_id}-{layer_id if layer_id is not None else random.randint(100, 1000)}-{random.randint(10000,99999)}**'
 
+    def notify_team(self, title:str, content:str, type:str = 'info'):
+        team = BattleTeam(self.team_id, data_manager=self.data_manager)
+        members = team.fetch_members()
+        for member in members:
+            Notification.create_notification(title, content, member, type)
+
+    def notify_all_battle(self, title:str, content:str, type:str = 'info'):
+        battle = Battlefield(self.battle_id, data_manager=self.data_manager)
+        members = battle.fetch_actors()
+        for member in members:
+            Notification.create_notification(title, content, member, type)
+
+    def air_respond(self, layer_id:int):
+        text = f'Вы видите как над {Layer(layer_id, self.battle_id).label} ({layer_id}) что-то было сброшено...'
+        self.notify_all_battle('Воздух...', text)
+
     @check_status()
     @require_command_points(4, 8)
     def artillery_strike(self, layer_id:int, value:int, ammo_id:str):
@@ -659,6 +691,8 @@ class Coordinator(DataModel):
 
         self.set_activity(False)
 
+        self.notify_all_battle('АРТУДАР!', f'**{Layer(layer_id, self.battle_id).label} ({layer_id}) накрывается ударом артиллерии!**', 'danger')
+
         action = f'вызываете артиллерийский огонь в виде **{value}** боеприпассов **{ammo.label}** и вскоре фиксируете поражение указанного квадрата местности'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Артудар'))
 
@@ -677,19 +711,22 @@ class Coordinator(DataModel):
 
         self.set_activity(False)
 
+        self.air_respond(layer_id)
+
         action = f'запускаете несколько снарядов, наполненных {value} минами типа {TrapInit(mine_type, data_manager=self.data_manager).label}, которые разываются прямо над полем боя и осыпаются'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Минирование'))
 
         return response
 
     @check_status()
-    @require_command_points(10, 5)
+    @require_command_points(2, 5)
     def reinforcement(self, layer_id:int, value:int):
 
         battle = Battlefield(self.battle_id, data_manager=self.data_manager)
         units = battle.spawn_units(value=value, layer_id=layer_id, team_id=self.team_id)
 
         self.set_activity(False)
+        self.air_respond(layer_id)
 
         action = f'отправляете на поле боя летательный аппарат с подкреплением в количестве {value} человек, которые высаживаются'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Подкрепление'))
@@ -719,6 +756,7 @@ class Coordinator(DataModel):
         layer.add_object('AmmoCrate', value=value)
 
         self.set_activity(False)
+        self.air_respond(layer_id)
 
         action = f'отправляете летательный аппарат и сбрасываете на поле боя {ObjectType("AmmoCrate", data_manager=self.data_manager).label}'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Снабжение | Патроны'))
@@ -733,6 +771,7 @@ class Coordinator(DataModel):
         layer.add_object('GrenadeCrate', value=value)
 
         self.set_activity(False)
+        self.air_respond(layer_id)
 
         action = f'отправляете летательный аппарат и сбрасываете на поле боя {ObjectType("GrenadeCrate", data_manager=self.data_manager).label}'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Снабжение | Взрывчатка'))
@@ -747,6 +786,7 @@ class Coordinator(DataModel):
         layer.add_object('MedCrate', value=value)
 
         self.set_activity(False)
+        self.air_respond(layer_id)
 
         action = f'отправляете летательный аппарат и сбрасываете на поле боя {ObjectType("MedCrate", data_manager=self.data_manager).label}'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Снабжение | Медицинская помощь'))
@@ -761,6 +801,7 @@ class Coordinator(DataModel):
         layer.add_object('RepairCrate', value=value)
 
         self.set_activity(False)
+        self.air_respond(layer_id)
 
         action = f'отправляете летательный аппарат и сбрасываете на поле боя {ObjectType("RepairCrate", data_manager=self.data_manager).label}'
         response = ResponsePool(Response(True, self.describe_action(action, layer_id), 'Снабжение | Инструменты'))
@@ -1175,7 +1216,7 @@ class Layer(DataModel):
 
         generated_objects: list[GenerateObject] = GenerateLayer(self.id, self.battle_id, self.terrain.id, self.height, data_manager=self.data_manager, object_value=value).objects
         for object in generated_objects:
-            object.inset_data()
+            object.insert_data()
 
         return generated_objects
 
@@ -1189,6 +1230,9 @@ class Layer(DataModel):
             objects_description += 'что здесь нет потенциальных укрытий и полезных объектов.'
 
         return f'-# {general_description}. {objects_description}'
+
+    def __str__(self):
+        return f'{self.id} - {self.label}'
 
 
 class Battlefield(DataModel):
@@ -1337,8 +1381,6 @@ class Battlefield(DataModel):
 
             :param actor_id: int - идентификатор персонажа
             :param kwargs: dict - дополнительные параметры актора (layer_id, object, team_id, initiative)
-
-            :return: float - итоговый размер в метрах
         """
 
         if self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {actor_id}'):
@@ -1348,8 +1390,8 @@ class Battlefield(DataModel):
                       'object': kwargs.get('object', None),
                       'team_id': kwargs.get('team_id', None),
                       'initiative': kwargs.get('initiative', random.randint(1, 100)),
-                      'is_active': None,
-                      'height': 0}
+                      'is_active': kwargs.get('is_active', None),
+                      'height': kwargs.get('height', 0)}
 
             self.data_manager.update('BATTLE_CHARACTERS', prompt, f'character_id = {actor_id}')
         else:
@@ -1359,9 +1401,11 @@ class Battlefield(DataModel):
                       'object': kwargs.get('object', None),
                       'team_id': kwargs.get('team_id', None),
                       'initiative': kwargs.get('initiative', random.randint(1, 100)),
-                      'is_active': None,
-                      'height': 0}
+                      'is_active': kwargs.get('is_active', None),
+                      'height': kwargs.get('height', 0)}
             self.data_manager.insert('BATTLE_CHARACTERS', prompt)
+
+        ActionPoints(ap=0, actor_id=actor_id).new_round_ap()
 
     def calculate_size(self) -> float:
         """
@@ -1526,8 +1570,6 @@ class Battlefield(DataModel):
             kills_exp = 250 * kills * teams_modifiers[member_team.id if member_team else None]
             win_points_exp = member_team.winpoints * 100 if member_team else 0
 
-            print(member, )
-
             CharacterProgress(member, data_manager=self.data_manager).update_progress_data(exp=kills_exp+win_points_exp)
 
         return True
@@ -1548,10 +1590,12 @@ class Battlefield(DataModel):
         if not winners:
             winners = []
         all_teams = self.fetch_teams()
+        print(all_teams)
         ending_text = f''
         for team in all_teams:
             team_obj = BattleTeam(team, data_manager=self.data_manager)
             team_casualties = team_obj.compare_casualties()
+            print(team, team_casualties, team_obj.get_dead_members(), team_obj.fetch_members())
 
             if team in winners:
                 prefix = ''
@@ -1577,6 +1621,12 @@ class Battlefield(DataModel):
 
         return ResponsePool(Response(True, ending_text, f'Конец {self.label} ({self.get_battle_type_label()})'))
 
+    def clear_round_sounds(self):
+        """
+        Очищает звуки раунда
+        """
+        self.data_manager.delete('BATTLE_SOUNDS', f'battle_id = {self.battle_id}')
+
     def next_round(self) -> tuple[bool, ResponsePool]:
         """
         Запускает следующий раунд (обновляет инициативу персонажей, просчитывает захваченные точки и выдаёт за них очки победы)
@@ -1594,8 +1644,11 @@ class Battlefield(DataModel):
         self.round += 1
         self.data_manager.update('BATTLE_INIT', {'round': self.round}, f'id = {self.battle_id}')
 
+        print(self.fetch_actors())
         for act in self.fetch_actors():
+            print(act)
             actor = Actor(act, data_manager=self.data_manager)
+            print(actor)
             if self.round % self.key_round_delay == 0:
                 new_initiative = actor.roll_initiative()
                 actor.set_initiative(new_initiative)
@@ -1608,11 +1661,14 @@ class Battlefield(DataModel):
             for team in teams:
                 BattleTeam(team, data_manager=self.data_manager).set_activity(True)
 
+        self.clear_round_sounds()
         BattleLogger.log_event(self.data_manager, self.battle_id, 'NewCycle', event_description=f'Начинается {self.round} раунд!')
 
         return False, ResponsePool(Response(True, f'*Начинается {"последний " if self.round == self.last_round else ""}{self.round} раунд!*', 'Сражение продолжается'))
 
     def next_actor(self) -> ResponsePool:
+        from ArbCharacters import Character
+
         if self.data_manager.check('BATTLE_CHARACTERS', f'battle_id = {self.battle_id} AND is_active = 1'):
             active_actor = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id} AND is_active = 1')[0].get('character_id')
             Actor(active_actor, data_manager=self.data_manager).set_active(False)
@@ -1622,8 +1678,9 @@ class Battlefield(DataModel):
             n_actor = self.max_initiative_actor()
             Actor(n_actor, data_manager=self.data_manager).set_active(True)
             BattleLogger.log_event(self.data_manager, self.battle_id, 'NewTurn', actor_id=n_actor, event_description=f'Персонаж {n_actor} начинает свой ход!')
+            Notification.create_notification('Ваш ход',f'*Ваш персонаж **{Character(n_actor).name}** прямо сейчас ходит в бою **{self.label}***',n_actor)
 
-            return ResponsePool(Response(True, f'*Персонаж ||(ID {n_actor})|| начинает свой ход!*', 'Ход'))
+            return ResponsePool(Response(True, f'*Персонаж ||{Character(n_actor).name}|| начинает свой ход!*', 'Ход'))
         else:
             is_last_round = self.next_round()
             if is_last_round[0]:
@@ -1634,7 +1691,8 @@ class Battlefield(DataModel):
             BattleLogger.log_event(self.data_manager, self.battle_id, 'NewTurn', actor_id=n_actor, event_description=f'Персонаж {n_actor} начинает свой ход!')
 
             responses = is_last_round[1].responses
-            responses.append(Response(True, f'*Персонаж ||(ID {n_actor})|| начинает свой ход!*', 'Ход'))
+            responses.append(Response(True, f'*Персонаж ||{Character(n_actor).name}|| начинает свой ход!*', 'Ход'))
+            Notification.create_notification('Ваш ход', f'*Ваш персонаж **{Character(n_actor).name}** прямо сейчас ходит в бою **{self.label}***', n_actor)
 
             return ResponsePool(responses)
 
@@ -1731,6 +1789,7 @@ class Battlefield(DataModel):
             if 'battle_id' in self.data_manager.get_all_columns(i):
                 self.data_manager.delete(i, f'battle_id = {self.battle_id}')
         self.data_manager.delete('BATTLE_INIT', filter=f'id = {self.battle_id}')
+        self.data_manager.update('LOC_INIT', {'current_battle': None}, filter=f'current_battle = {self.battle_id}')
 
     def update_battle(self, **kwargs) -> None:
 
@@ -1797,14 +1856,15 @@ class Battlefield(DataModel):
                                          f'battle_id = {self.battle_id} AND layer_id = {i}')
                 current_id += 1
 
-    def add_sound(self, sound_type: str, actor_id: int = None, layer_id: int = None, volume: int = None):
+    def add_sound(self, sound_type: str, actor_id: int = None, layer_id: int = None, volume: int = None, content:str = None):
         c_id = self.data_manager.maxValue('BATTLE_SOUNDS', 'id') + 1
         prompt = {'id': c_id,
                   'battle_id': self.battle_id,
                   'actor_id': actor_id if actor_id else None,
                   'layer_id': layer_id if layer_id is not None else 0,
                   'sound_id': sound_type,
-                  'volume': volume if volume is not None else random.randint(50, 150)}
+                  'volume': volume if volume is not None else random.randint(50, 150),
+                  'content': content if content else None}
 
         self.data_manager.insert('BATTLE_SOUNDS', prompt)
 
@@ -1825,13 +1885,59 @@ class Battlefield(DataModel):
 
         return sound
 
+    def __str__(self):
+        return f'{self.battle_id} - **{self.label}**'
 
+    @staticmethod
+    def revive_actor(character_id:int):
+        db = DataManager()
+        if not db.check('BATTLE_DEAD', f'character_id = {character_id}'):
+            return
+        if db.check('CHARS_INJURY', f'id = {character_id}'):
+            db.delete('CHARS_INJURY', f'id = {character_id}')
+
+        data = db.select_dict('BATTLE_DEAD', filter=f'character_id = {character_id}')[0]
+        db.delete('BATTLE_DEAD', f'character_id = {character_id}')
+        query = {'battle_id': data.get('battle_id'),
+                 'layer_id': data.get('layer_id'),
+                 'character_id': character_id,
+                 'team_id': data.get('team_id'),
+                 'initiative': 20,
+                 'is_active': None,
+                 'height':0
+                 }
+        db.insert('BATTLE_CHARACTERS', query)
+
+    @staticmethod
+    def get_active_battles():
+        db = DataManager()
+        battles = [battle.get('id') for battle in db.select_dict('BATTLE_INIT')]
+        return battles
+
+    @staticmethod
+    def get_actor_battle(character_id:int):
+        db = DataManager()
+        battle_id = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {character_id}')
+        if not battle_id:
+            return None
+        else:
+            return battle_id[0].get('battle_id')
 
 
 
 class DamageManager:
     def __init__(self, data_manager: DataManager = None):
         self.data_manager = data_manager if data_manager else DataManager()
+
+    def get_target_user(self, target_id:int):
+        users = self.data_manager.select_dict('PLAYERS', filter=f'character_id = {target_id}')
+        if not users:
+            return []
+        else:
+            return [user.get('id') for user in users]
+
+    def notify_damaged_users(self, target_id:int, text:str):
+        pass
 
     def target_random_element(self, target_id:int, *, body_group:str = None) -> BodyElement:
         target_body = Body(target_id, data_manager=self.data_manager)
@@ -1851,15 +1957,15 @@ class DamageManager:
 
         element.apply_damage(damage, True)
 
-    def process_damage(self, target_id:int, shots: list[Damage]) -> str:
+    def process_damage(self, target_id:int, shots: list[Damage], **kwargs) -> str:
         damage_list = shots
         total_damage = []
 
-        current_element: BodyElement = self.target_random_element(target_id)
+        current_element: BodyElement = self.target_random_element(target_id) if not kwargs.get('bodyelement') else BodyElement(target_id, kwargs.get('bodyelement'), data_manager=self.data_manager)
         armor = self.get_target_armor(target_id)
 
         for damage in damage_list:
-
+            print('БРОНЯ:', armor)
             n_damage = armor.ballistic_simulation(current_element.body_parts_group, damage)
             if n_damage:
                 e_d_pair = (current_element, n_damage)
@@ -1868,9 +1974,12 @@ class DamageManager:
         for pair in total_damage:
             self.apply_damage(pair)
 
-        text = ''
+        text = '```'
         for pair in total_damage:
             text += f'- {pair[1].__str__()} по {pair[0].label}\n'
+        text += '```'
+
+        Notification.create_notification('Получен урон!', text, target_id, 'danger')
 
         return text
 
@@ -1903,7 +2012,7 @@ class RangeAttack(Attack):
         weapon = self.get_weapon()
         bullets = weapon.can_shoot()
         if not bullets:
-            return Response(False, 'У вашего оружия нет боезапаса или оно не предназначено для стрельбы.', 'Стрельба невозможна')
+            return None
 
         damage_list = []
 
@@ -1918,7 +2027,7 @@ class RangeAttack(Attack):
         weapon.use_bullet(shots)
 
         for _ in range(shots):
-            self.attacker.make_sound('GunShot', weapon.shot_noise())
+            self.attacker.make_sound('GunShot', weapon.shot_noise(), content=f'Вы слышали оглушительный хлопок от выстрела из {SkillInit(weapon.weapon_class).label}, оставивший за собой эхо')
 
             print('attacker', self.attacker.actor_id)
             roll = self.check_skill(weapon.weapon_class, shot_difficulty)
@@ -2113,13 +2222,16 @@ class BodyPartAttack(Attack):
                 damage_list.append(n_damage)
 
         else:
+            armor_force = self.attacker.get_capacity_or_armor_skill('Force')
+            damage_bonus = armor_force / 4
+
             for _ in range(attacks):
                 self.attacker.make_sound('Fight', random.randint(50, 150))
                 roll = self.compare_skills(target_id)
                 if not roll[0]:
                     continue
 
-                raw_damage = attack.attack()
+                raw_damage = attack.attack(damage_bonus=damage_bonus)
                 n_damage = damage_manager.process_damage(target_id, raw_damage)
 
                 if not n_damage:
@@ -2265,7 +2377,7 @@ class ActorVision:
 
         self.dov = self.distance_of_view()
 
-    def distance_of_view(self):
+    def distance_of_view(self) -> float:
         vision = self.actor.get_body().get_capacity('Vision') / 100
         actor_height = self.actor.get_total_height()
 
@@ -2275,7 +2387,7 @@ class ActorVision:
 
         return basic_fov * vision * self.time_factor * self.weather_factor
 
-    def get_nightvision_baff(self):
+    def get_nightvision_baff(self) -> float:
         from ArbClothes import CharacterArmor
 
         capacity = self.actor.get_capacity('NightVision')
@@ -2283,7 +2395,7 @@ class ActorVision:
 
         return max(capacity, armor_bonus)
 
-    def get_recon_baff(self):
+    def get_recon_baff(self) -> float:
         from ArbClothes import CharacterArmor
 
         capacity = self.actor.get_capacity('Recon')
@@ -2291,7 +2403,7 @@ class ActorVision:
 
         return max(capacity, armor_bonus)
 
-    def get_thermal_vision_baff(self):
+    def get_thermal_vision_baff(self) -> float:
         from ArbClothes import CharacterArmor
 
         capacity = self.actor.get_capacity('ThermalVision')
@@ -2299,7 +2411,7 @@ class ActorVision:
 
         return max(capacity, armor_bonus)
 
-    def get_time_factor(self):
+    def get_time_factor(self) -> float:
         time_factor = self.actor.get_battle().time.visibility if self.actor.battle_id else 100
         if time_factor < 100:
             night_vision_baff = self.get_nightvision_baff() / 100
@@ -2310,14 +2422,15 @@ class ActorVision:
 
         return (100 - time_penalty) / 100
 
-    def get_weather_factor(self):
+    def get_weather_factor(self) -> float:
         return self.actor.get_battle().weather.visibility/100 if self.actor.battle_id else 1
 
     def layer_vigilance(self, target_layer: int, distance_delta: float):
         total_distance = abs(target_layer - self.actor.layer_id) * distance_delta
         terrain_coverage = Layer(target_layer, self.actor.battle_id).terrain.visibility / 100
+        layer_baff = 0 if self.actor.layer_id != target_layer else 40
 
-        return round((self.dov - total_distance) / self.dov * 100 * self.time_factor * self.weather_factor * terrain_coverage, 2)
+        return round((self.dov - total_distance) / self.dov * 100 * self.time_factor * self.weather_factor * terrain_coverage + layer_baff, 2)
 
     def total_layers_vigilance(self):
         battle = self.actor.get_battle()
@@ -2392,7 +2505,9 @@ class ActorVision:
             visible_characters[layer_id] = []
 
             for character_id in layer_characters:
-                if Actor(character_id, data_manager=self.data_manager).disguise() > vigilance * thermal_vision_baff * recon_baff:
+                object_baff = 20 if Actor(character_id, data_manager=self.data_manager).object_id == self.actor.object_id else 0
+
+                if Actor(character_id, data_manager=self.data_manager).disguise() > vigilance * thermal_vision_baff * recon_baff + object_baff:
                     continue
                 else:
                     visible_characters[layer_id].append(character_id)
@@ -2409,21 +2524,33 @@ class ActorVision:
 
         return total_bodies
 
-    def string_vigilance(self):
-        from ArbCharacters import Character
+    def process_actor_vigilance(self, actor_id:int):
 
+        actor = Actor(actor_id, data_manager=self.data_manager)
+        team_members = self.actor.get_team().get_dead_members() + self.actor.get_team().fetch_members()
+        if actor.actor_id in team_members:
+            return f'**{actor.get_character().name}**'
+        else:
+            return f'||Неизвестный {actor.get_character().race.label.lower()} ({actor_id})||'
+
+    def string_vigilance(self):
         visible_characters = self.get_visible_characters()
         visible_dead_bodies = self.get_visible_dead_bodies()
         visible_layers = self.total_layers_vigilance()
 
+        chunks = []
         total_text = f''
         for layer in sorted(visible_layers.keys()):
             c_layer = Layer(layer, self.actor.battle_id, data_manager=self.data_manager)
             c_characters = visible_characters.get(layer, [])
-            c_dead_bodies = visible_dead_bodies.get(layer, [])
+            if len(c_characters) == 1 and c_characters[0] == self.actor.actor_id:
+                c_characters = []
 
-            characters_text = f'Вы видите силуэты ' + f', '.join(f'**{Character(char, data_manager=self.data_manager).race.label.lower()} ||( {char} )||**' for char in c_characters if char != self.actor.actor_id) if c_characters else 'Вы не замечаете живых существ поблизости.'
-            dead_bodies_text = f'. Вы видите трупы: ' + f', '.join(f'**{Character(char, data_manager=self.data_manager).race.label.lower()} ||( {char} )||**' for char in c_dead_bodies) if c_dead_bodies else ''
+            c_dead_bodies = visible_dead_bodies.get(layer, [])
+            characters_text = f'Вы видите силуэты ' if c_characters else 'Вы не замечаете живых существ поблизости'
+            dead_bodies_text = f'. Вы видите трупы: ' if c_dead_bodies else ''
+            characters_text += f', '.join(self.process_actor_vigilance(char) for char in c_characters if char != self.actor.actor_id)
+            dead_bodies_text += f', '.join(self.process_actor_vigilance(char) for char in c_dead_bodies)
 
             layer_text = f'''
 ***{c_layer.label} ||(Слой {layer})||*** {'``<--- Вы здесь``' if self.actor.layer_id == layer else ''}
@@ -2432,8 +2559,9 @@ class ActorVision:
 -# {characters_text}{dead_bodies_text}
 '''
             total_text += layer_text
+            chunks.append(layer_text)
 
-        return total_text
+        return total_text, chunks
 
 
 class ActorMovement:
@@ -2476,10 +2604,11 @@ class ActorMovement:
 
         return [back, forward]
 
-    def trap_checking(self):
+    def trap_checking(self, log: 'ActionManager') -> tuple[bool, RespondLog]:
         current_traps = self.actor.get_layer().get_traps()
         if not current_traps:
-            return True, Response(True, f'Вы успешно продвигаетесь по местности не встречая преград на своем пути...', 'Преграды')
+            log.action('Преграды', f'Вы успешно продвигаетесь по местности не встречая преград на своем пути...', RespondIcon.success())
+            return True, log.log
 
         from ArbWeapons import Trap
 
@@ -2497,11 +2626,13 @@ class ActorMovement:
                 total_damage = DamageManager(self.actor.data_manager).process_damage(self.actor.actor_id, activations)
 
                 is_actor_dead = ActorDeath(self.actor.actor_id, None, data_manager=self.actor.data_manager).check_death()
-                return False, Response(False, f'По мере движения вы натыкаетесь на ловушку ({c_trap.label}), которая активируется прямо рядом с вами!', 'Ловушки!')
+                log.action('Ловушки', f'По мере движения вы натыкаетесь на ловушку ({c_trap.label}), которая активируется прямо рядом с вами!', RespondIcon.danger())
+                return False, log.log
 
-        return True, Response(True, f'Вы успешно продвигаетесь по местности не встречая преград на своем пути...', 'Преграды')
+        log.action('Преграды', f'Вы успешно продвигаетесь по местности не встречая преград на своем пути...', RespondIcon.success())
+        return True, log.log
 
-    def move_forward(self):
+    def move_forward(self, log: 'ActionManager') -> tuple[bool, RespondLog | None]:
         c_slots = self.get_nearby_layers_id()
         if c_slots[1] is None:
             return False, None
@@ -2513,14 +2644,14 @@ class ActorMovement:
             return False, None
         else:
             if self.actor.fly_height == 0:
-                success, response = self.trap_checking()
+                success, response = self.trap_checking(log)
                 if not success:
-                    return success, response
+                    return success, log.log
 
             self.set_layer(c_slots[1])
             return True, None
 
-    def move_back(self):
+    def move_back(self, log: 'ActionManager') -> tuple[bool, RespondLog | None]:
         c_slots = self.get_nearby_layers_id()
         if c_slots[0] is None:
             return False, None
@@ -2532,40 +2663,48 @@ class ActorMovement:
             return False, None
         else:
             if self.actor.fly_height == 0:
-                success, response = self.trap_checking()
+                success, response = self.trap_checking(log)
                 if not success:
-                    return success, response
+                    return success, log.log
 
             self.set_layer(c_slots[0])
             return True, None
 
-    def hande_move_event(self, layer_id:int):
-        event = MoveEvent(self.actor, layer_id)
-        statuses = self.actor.get_statuses()
-        responses = statuses.handle_event('move', event)
+    def hande_move_event(self, log: 'ActionManager') -> tuple[bool, RespondLog]:
+        status = self.actor.status()
+        log = log
+        log.log = status.trigger_melees(log.log)
+        log.log = status.trigger_suppressors(log.log)
+        log.log = status.trigger_containers(log.log)
 
-        if random.randint(0, 100) > sum([random.randint(0, 100) for _ in range(len(statuses.get_melee_target_from()))]):
-            statuses.flee_from_melee()
+        if random.randint(0, 100) > sum([random.randint(0, 100) for _ in range(len(status.melees))]):
+            status.clear_melees(self.actor.actor_id)
         else:
-            return False, responses
+            return False, log.log
 
-        return True, responses
+        return True, log.log
 
     def steps_volume(self):
         basic_roll = random.randint(10, 200)
         stealth_mod = self.actor.get_skill('Stealth') * 0.5
         return basic_roll - stealth_mod if basic_roll - stealth_mod > 10 else 10
 
-    def move_to_layer(self, layer_id:int):
+    def move_to_layer(self, layer_id:int) -> 'ActionManager':
+        log = self.actor.AM()
+
         if layer_id not in self.actor.get_battle().get_layers().keys():
-            return ResponsePool(Response(False, 'Этого слоя не существует в данном бою.', 'Перемещение'))
+            log.action('Перемещение', 'Этого слоя не существует в данном бою.', RespondIcon.info())
+            return log
 
         if self.actor.layer_id == layer_id:
-            return ResponsePool(Response(False, 'Вы уже находитесь на этом слое', 'Перемещение'))
+            log.action('Перемещение', 'Вы уже находитесь на этом слое.', RespondIcon.info())
+            return log
 
-        move_success, responses = self.hande_move_event(self.actor.layer_id)
+        StatusManager.clear_all_statuses(self.actor.actor_id)
+        move_success, responses = self.hande_move_event(log)
         if not move_success:
-            return ResponsePool(Response(False, 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают сбежать', 'Неудачное перемещение'))
+            log.action('Неудачное перемещение', 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают сбежать', RespondIcon.failure())
+            return log
 
         steps_volume = self.steps_volume()
 
@@ -2574,20 +2713,26 @@ class ActorMovement:
         if self.actor.layer_id < layer_id:
             for _ in range(layer_id-self.actor.layer_id):
                 self.actor.make_sound('Steps', steps_volume)
-                movement_success, layer_response = self.move_forward()
+                movement_success, layer_response = self.move_forward(log)
+                log.log = layer_response if layer_response else log.log
                 if not movement_success:
-                    responses.append(layer_response)
                     break
+
         elif self.actor.layer_id > layer_id:
             for _ in range(self.actor.layer_id-layer_id):
                 self.actor.make_sound('Steps', steps_volume)
-                movement_success, layer_response = self.move_back()
+                movement_success, layer_response = self.move_back(log)
+                log.log = layer_response if layer_response else log.log
                 if not movement_success:
-                    responses.append(layer_response)
                     break
 
-        responses.append(Response(True, f'-# Вы проходите какое-то расстояние и оказываетесь на **{Layer(self.actor.layer_id, self.actor.battle_id, data_manager=self.actor.data_manager).label}** ||**(Слой {self.actor.layer_id})**||. {Layer(self.actor.layer_id, self.actor.battle_id, data_manager=self.actor.data_manager).terrain.desc}','Перемещение'))
-        return ResponsePool(responses)
+        StatusManager.clear_targeters(self.actor.actor_id)
+
+        log.action('Перемещение',
+                   f'-# Вы проходите какое-то расстояние и оказываетесь на **{Layer(self.actor.layer_id, self.actor.battle_id, data_manager=self.actor.data_manager).label}** ||**(Слой {self.actor.layer_id})**||. {Layer(self.actor.layer_id, self.actor.battle_id, data_manager=self.actor.data_manager).terrain.desc}',
+                   RespondIcon.success())
+
+        return log
 
     def get_layer_objects(self):
         layer = self.actor.layer_id
@@ -2599,8 +2744,10 @@ class ActorMovement:
         self.actor.fly_height = height
         self.actor.data_manager.update('BATTLE_CHARACTERS', {'height': height}, f'character_id = {self.actor.actor_id}')
 
-    def fly(self, height: int):
+    def fly(self, height: int) -> 'ActionManager':
         from ArbClothes import CharacterArmor
+
+        log = self.actor.AM()
 
         stat = self.actor.get_body().get_capacity('Flying')
         armors_skills = CharacterArmor(self.actor.actor_id, data_manager=self.actor.data_manager).armors_skills().get('Flying', 0)
@@ -2608,278 +2755,151 @@ class ActorMovement:
         total_value = stat + armors_skills
 
         if total_value <= 0:
-            return ResponsePool(Response(False, 'Вы не можете летать!', 'Невозможно летать!'))
+            log.action('Невозможно летать', 'Вы не можете летать', RespondIcon.info())
+            return log
 
         cost = round((height // 10) * ((200 - total_value)/100))
 
         if height <= 0:
-            return ResponsePool(Response(False, 'Вы не можете опуститься так низко!', 'Невозможно опуститься!'))
+            log.action('Невозможно опуститься', 'Вы не можете опуститься так низко!', RespondIcon.info())
+            return log
 
         cost = 1 if cost <= 0 and height > 0 else cost
 
         ap_use_result = self.actor.ap_use(cost)
 
         if not ap_use_result:
-            return ResponsePool(Response(False, 'Вам не хватает очков действия для полета!', 'Невозможно летать!'))
+            log.action('Невозможно лететь', 'Вам не хватает очков действия для полёта', RespondIcon.failure())
+            return log
+
+        self.set_object(None)
+        success, responses = self.hande_move_event(self.actor.layer_id)
+        if not success:
+            response = Response(False, 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают взлететь!', 'Невозможность полета!')
         else:
-            self.set_object(None)
-            success, responses = self.hande_move_event(self.actor.layer_id)
-            if not success:
-                response = Response(False, 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают взлететь!', 'Невозможность полета!')
-            else:
-                response = Response(True, f'Вы летите выше на {height}м.!', 'Полет')
-                self.set_fly_height(height)
+            response = Response(True, f'Вы летите выше на {height}м.!', 'Полет')
+            self.set_fly_height(height)
 
-            responses.append(response)
+        log.log.response_to_respond(response)
 
-            return responses
+        return log
 
-    def move_to_object(self, object_id: int = None):
+    def move_to_object(self, object_id: int = None) -> 'ActionManager':
+        log = self.actor.AM()
         layer_objects = self.get_layer_objects()
         if object_id not in layer_objects and object_id is not None:
-            return ResponsePool(Response(False, f'Данного объекта ``({object_id})`` нет в этой местности!', 'Перемещение к объекту'))
+            log.action('Перемещение к объекту', f'Данного объекта ``({object_id})`` нет в этой местности!', RespondIcon.info())
+            return log
 
         if object_id:
             if GameObject(object_id, data_manager=self.actor.data_manager).available_slots <= 0:
-                return ResponsePool(Response(False, f'У данного объекта нет места, которое можно занять!'))
+                log.action('Перемещение к объекту', f'У данного объекта нет места, которое можно занять!', RespondIcon.failure())
+                return log
 
         c_cost = round(self.movement_cost() * 0.5)
 
         ap_use = self.actor.ap_use(c_cost)
 
         if not ap_use:
-            return ResponsePool(Response(False, 'Вам не хватает очков действия для перемещения!', 'Перемещение к объекту'))
+            log.action('Перемещение к объекту', 'Вам не хватает очков действия для перемещения', RespondIcon.failure())
+            return log
 
-        move_result, responses = self.hande_move_event(self.actor.layer_id)
+        StatusManager.clear_all_statuses(self.actor.actor_id)
+        move_result, responses = self.hande_move_event(log)
 
         if not move_result:
-            return ResponsePool(Response(False, 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!', 'Противники!'))
+            log.action('Противники', 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!', RespondIcon.failure())
+            return log
 
         self.set_object(None)
 
+        StatusManager.clear_targeters(self.actor.actor_id)
         self.actor.make_sound('Steps', self.steps_volume())
 
+
         if self.actor.fly_height == 0:
-            success, trap_response = self.trap_checking()
-            responses.append(trap_response)
+            success, trap_response = self.trap_checking(log)
+            log.log = trap_response
             if not success:
-                return ResponsePool(responses)
+                return log
         else:
             self.actor.fly_height(0)
-            responses.append(Response(True, 'Вы снижаетесь для занимания объекта в качестве укрытия', 'Полет'))
+            log.action('Полет', 'Вы снижаетесь для занимания объекта в качестве укрытия', RespondIcon.info())
 
         if object_id is not None:
             self.set_object(object_id)
 
         response = Response(True, f'Вы перемещаетесь к объекту **{GameObject(object_id, data_manager=self.actor.data_manager).object_type.label}** ||({object_id})|| и занимаете в качестве укрытия', 'Перемещение к объекту') if object_id else Response(True, f'Вы успешно покидаете укрытие!', 'Перемещение к объекту')
-        responses.append(response)
+        log.log.response_to_respond(response)
 
-        return ResponsePool(responses)
+        return log
 
-    def flee_from_melee(self):
+    def flee_from_melee(self, log: 'ActionManager') -> RespondLog:
+        log = log
+
         c_cost = round(self.movement_cost() * 0.5)
 
         ap_use = self.actor.ap_use(c_cost)
 
         if not ap_use:
-            return ResponsePool(Response(False, 'Вам не хватает очков действия для перемещения!', 'Ближний бой'))
+            log.action('Ближний бой', 'Вам не хватает очков действия для перемещения', RespondIcon.failure())
+            return log.log
 
-        move_result, responses = self.hande_move_event(self.actor.layer_id)
+        move_result, responses = self.hande_move_event(log)
+        log.log = responses
 
         if not move_result:
-            return ResponsePool(Response(False,
-                                         'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!',
-                                         'Противники!'))
+            log.action('Ближний бой', 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!', RespondIcon.failure())
+            return log.log
 
         self.actor.make_sound('Steps', self.steps_volume())
 
         if self.actor.fly_height == 0:
-            success, trap_response = self.trap_checking()
-            responses.append(trap_response)
+            success, trap_response = self.trap_checking(log)
+            log.log = trap_response
             if not success:
-                return ResponsePool(responses)
+                return log.log
 
-        self.actor.get_statuses().flee_from_melee()
+        self.actor.status().clear_melees(self.actor.actor_id)
 
-        response = Response(True, f'Вам удаётся отбиться от противника и сбежать из ближнего боя!','Ближний бой')
-        responses.append(response)
+        log.action('Ближний бой', 'Вам удаётся отбиться от противника и сбежать из ближнего боя!', RespondIcon.success())
 
-        return ResponsePool(responses)
+        return log.log
 
-    def escape(self):
-
+    def escape(self) -> 'ActionManager':
+        log = self.actor.AM()
         c_cost = self.movement_cost()
 
         ap_use = self.actor.ap_use(c_cost)
 
         if not ap_use:
-            return ResponsePool(
-                Response(False, 'Вам не хватает очков действия для перемещения!', 'Побег из боя'))
+            log.action('Бег из боя', 'Вам не хватает очков действия для перемещения!', RespondIcon.failure())
+            return log
 
-        move_result, responses = self.hande_move_event(self.actor.layer_id)
+        move_result, responses = self.hande_move_event(log)
 
+        log.log = responses
         if not move_result:
-            return ResponsePool(Response(False,
-                                         'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!',
-                                         'Противники!'))
+            log.action('Бег из боя', 'Противники, которые находятся с вами в ближнем бою сдерживают вас и не дают переместиться!', RespondIcon.failure())
+            return log
 
         self.set_object(None)
 
         self.actor.make_sound('Steps', self.steps_volume())
 
         if self.actor.fly_height == 0:
-            success, trap_response = self.trap_checking()
-            responses.append(trap_response)
+            success, trap_response = self.trap_checking(log)
+            log.log = trap_response
             if not success:
-                return ResponsePool(responses)
+                return log
 
         self.actor.clear_ap()
-        self.actor.get_statuses().clear_statuses()
+        self.actor.status().dead_clear(self.actor.actor_id)
         self.actor.data_manager.delete('BATTLE_CHARACTERS', f'character_id = {self.actor.actor_id}')
 
-        response = Response(True, '-# Вы пересекаете местность и покидаете поле боя, оставляя сражение позади...', 'Побег из боя')
-        responses.append(response)
+        log.action('Побег из боя', '-# Вы пересекаете местность и покидаете поле боя, оставляя сражение позади...', RespondIcon.success())
 
-        return ResponsePool(responses)
-
-
-class ActorTacticalStatus:
-    def __init__(self, actor: 'Actor', event_manager: 'EventManager'):
-        self.actor = actor
-        self.data_manager = actor.data_manager
-        self.event_manager = event_manager
-
-        self.actor_attack_trigger()
-        self.actor_move_trigger()
-        self.actor_object_trigger()
-
-    def get_supressors(self):
-        if self.actor.object_id is None:
-            return []
-
-        if self.data_manager.check('CHARS_COMBAT', f'supressed = {self.actor.object_id}'):
-            return [Actor(actor.get('id'), data_manager=self.data_manager) for actor in self.data_manager.select_dict('CHARS_COMBAT', filter=f'supressed = {self.actor.object_id}')]
-        else:
-            return []
-
-    def get_hunters(self):
-        if self.data_manager.check('CHARS_COMBAT', f'hunted = {self.actor.actor_id}'):
-            return [Actor(actor.get('id'), data_manager=self.data_manager) for actor in self.data_manager.select_dict('CHARS_COMBAT', filter=f'hunted = {self.actor.actor_id}')]
-        else:
-            return []
-
-    def get_containments(self):
-        if self.actor.layer_id is None:
-            return []
-
-        if self.data_manager.check('CHARS_COMBAT', f'contained = {self.actor.layer_id}'):
-            total_actors = []
-            potential_actors = [actor.get('id') for actor in self.data_manager.select_dict('CHARS_COMBAT', filter=f'contained = {self.actor.layer_id}')]
-            for actor in potential_actors:
-                if not self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {actor} AND battle_id = {self.actor.battle_id}'):
-                    continue
-                else:
-                    total_actors.append(Actor(actor, data_manager=self.data_manager))
-
-            return total_actors
-        else:
-            return []
-
-    def get_in_overwatch(self):
-        if self.data_manager.check('CHARS_COMBAT', f'ready = 1 and id = {self.actor.actor_id}'):
-            return True
-        else:
-            return False
-
-    def get_melee_target_from(self):
-        if self.data_manager.check('CHARS_COMBAT', f'melee_target = {self.actor.actor_id}'):
-            return [Actor(actor.get('id'), data_manager=self.data_manager) for actor in self.data_manager.select_dict('CHARS_COMBAT', filter=f'melee_target = {self.actor.actor_id}')]
-        else:
-            return []
-
-    def get_enemy_readyness(self, enemy_id:int):
-        if self.data_manager.check('CHARS_COMBAT', f'ready = 1 and id = {enemy_id}'):
-            return True
-        else:
-            return False
-
-    def clear_statuses(self):
-        hunters = self.get_hunters()
-        melee = self.get_melee_target_from()
-
-        for actor in hunters:
-            self.data_manager.update('CHARS_COMBAT', {'hunted': None},f'id = {actor.actor_id}')
-        for actor in melee:
-            self.data_manager.update('CHARS_COMBAT', {'melee_target': None}, f'id = {actor.actor_id}')
-
-        query = {'supressed': None,
-                 'hunted': None,
-                 'melee_target': None,
-                 'contained': None,
-                 'ready': None,
-                 'target': None}
-
-        self.data_manager.update('CHARS_COMBAT', query, f'id = {self.actor.actor_id}')
-
-    def flee_from_melee(self):
-        melee = self.get_melee_target_from()
-        for actor in melee:
-            self.data_manager.update('CHARS_COMBAT', {'melee_target': None}, f'id = {actor.actor_id}')
-
-        self.data_manager.update('CHARS_COMBAT', {'melee_target': None}, f'id = {self.actor.actor_id}')
-
-    def actor_attack_trigger(self):
-        supressors = self.get_supressors()
-        hunters = self.get_hunters()
-        melee = self.get_melee_target_from()
-
-        sup_handler = SuppresssionHandler(supressors)
-        hunt_handler = HuntHandler(hunters)
-        melee_handler = MeleeHandler(melee)
-
-        self.event_manager.listen('attack', sup_handler)
-        self.event_manager.listen('attack', hunt_handler)
-        self.event_manager.listen('attack', melee_handler)
-
-        self.event_manager.listen('melee_attack', hunt_handler)
-
-    def actor_move_trigger(self):
-        containments = self.get_containments()
-        supressors = self.get_supressors()
-        melee = self.get_melee_target_from()
-
-        cont_handler = ContainmentHandler(containments)
-        sup_handler = SuppresssionHandler(supressors)
-        melee_handler = MeleeHandler(melee)
-
-        self.event_manager.listen('move', cont_handler)
-        self.event_manager.listen('move', sup_handler)
-        self.event_manager.listen('move', melee_handler)
-
-    def actor_object_trigger(self):
-        supressors = self.get_supressors()
-        melee = self.get_melee_target_from()
-        hunters = self.get_hunters()
-
-        hunt_handler = HuntHandler(hunters)
-        sup_handler = SuppresssionHandler(supressors)
-        melee_handler = MeleeHandler(melee)
-
-        self.event_manager.listen('object', hunt_handler)
-        self.event_manager.listen('object', sup_handler)
-        self.event_manager.listen('object', melee_handler)
-
-    def enemy_overwatch_trigger(self, enemy_id:int):
-        overwatch = OverwatchHandler([Actor(enemy_id, data_manager=self.data_manager)])
-        self.event_manager.listen('attack', overwatch)
-
-    def handle_event(self, event_type:str, event):
-        if event_type == 'attack':
-            self.enemy_overwatch_trigger(event.target)
-
-        self.event_manager.trigger(event_type, event)
-
-        return self.event_manager.responses
+        return log
 
 
 class ActionPoints:
@@ -2892,13 +2912,32 @@ class ActionPoints:
     def character_ap(cls, actor_id:int, data_manager: DataManager = None):
         data_manager = data_manager if data_manager else DataManager()
         record = DataDict('CHARS_COMBAT', f'id = {actor_id}', data_manager=data_manager)
-        return cls(ap=record.get('ap', 0), data_manager=data_manager, actor_id=actor_id)
+        obj = cls(ap=record.get('ap', 0), data_manager=data_manager, actor_id=actor_id)
+        obj.check_record()
+        return obj
+
+    def check_record(self):
+        if not self.data_manager.check('CHARS_COMBAT', f'id = {self.actor_id}'):
+            query = {
+                'id': self.actor_id,
+                'ap': 0,
+                'ap_bonus': 0,
+                'supressed': None,
+                'hunted': None,
+                'contained': None,
+                'ready': None,
+                'target': None,
+                'melee_target': None
+            }
+            self.data_manager.insert('CHARS_COMBAT', query)
 
     def add(self, ap: int):
+        self.check_record()
         self.ap += ap
         self.data_manager.update('CHARS_COMBAT', {'ap': self.ap}, f'id = {self.actor_id}')
 
     def use(self, ap: int):
+        self.check_record()
         if self.ap >= ap:
             self.ap -= ap
             self.data_manager.update('CHARS_COMBAT', {'ap': self.ap}, f'id = {self.actor_id}')
@@ -2907,10 +2946,14 @@ class ActionPoints:
             return False
 
     def new_round_ap(self):
+        self.check_record()
         basic_ap = 10
+
+        actor_bonus = Actor(self.actor_id, data_manager=self.data_manager).get_capacity_or_armor_skill('Power') / 10
+
         ap_bonus = self.data_manager.select_dict('CHARS_COMBAT', filter=f'id = {self.actor_id}')[0].get('ap_bonus')
         ap_bonus = ap_bonus if ap_bonus is not None else 0
-        self.data_manager.update('CHARS_COMBAT', {'ap': basic_ap + ap_bonus, 'ap_bonus': 0}, f'id = {self.actor_id}')
+        self.data_manager.update('CHARS_COMBAT', {'ap': basic_ap + ap_bonus + actor_bonus, 'ap_bonus': 0}, f'id = {self.actor_id}')
 
 
 class ActorDeath:
@@ -2923,6 +2966,7 @@ class ActorDeath:
     def check_death(self):
         body = Body(self.target, data_manager=self.data_manager)
         if body.is_dead()[0]:
+            Notification.create_notification('Смерть', f'Персонаж {Actor(self.target).get_character().name} погиб{f"от рук {Actor.get_actor_character(self.killer).name}" if self.killer else ""}...\n-# Причина смерти: {self.reason}', self.target, type='danger')
             Actor(self.target, data_manager=self.data_manager).die(self.killer, self.reason)
             return True
         else:
@@ -2949,6 +2993,11 @@ class Actor(DataModel):
         self.fly_height = self.get('height', 0) if self.get('height') else 0
         self.ap = self.get_ap()
 
+    def get_character(self):
+        from ArbCharacters import Character
+        character: Character = Character(self.actor_id, data_manager=self.data_manager)
+        return character
+
     def actor_inventory(self):
         from ArbItems import Inventory
         inventory: Inventory = Inventory.get_inventory_by_character(self.actor_id, data_manager=self.data_manager)
@@ -2963,13 +3012,31 @@ class Actor(DataModel):
         def decorator(method):
             @wraps(method)
             def wrapper(self, *args, **kwargs):
+                log = self.AM()
                 if self.is_dead():
-                    return ResponsePool(
-                        Response(False, message_dead if message_dead else '-# Вы погибли и не можете совершать действия', title_dead if title_dead else 'Смерть...'))
+                    log.action('Смерть', '-# Вы погибли и не можете совершать действия', RespondIcon.danger())
+                    return log
                 if not self.is_active:
-                    return ResponsePool(Response(False, message_inactive if message_inactive else '-# Вы не можете совершать действия не на своём ходу', title_inactive if title_inactive else 'Активность'))
+                    log.action('Активность','-# Вы не можете совершать действия не на своём ходу', RespondIcon.failure())
+                    return log
                 return method(self, *args, **kwargs)
 
+            return wrapper
+
+        return decorator
+
+    @staticmethod
+    def ap_required(cost:int=1):
+        def decorator(method):
+            @wraps(method)
+            def wrapper(self, *args, **kwargs):
+                result = self.ap.action_use(cost)
+                if not result:
+                    log = self.AM()
+                    log.action('Недостаточно ОД', f'-# *У персонажа **{self.get_character().name}** не хватает очков действия!*', RespondIcon.info())
+                    return log
+                else:
+                    return method(self, *args, **kwargs)
             return wrapper
 
         return decorator
@@ -2997,7 +3064,7 @@ class Actor(DataModel):
     def die(self, killer_id:int = None, reason:str=None) -> None:
         BattleLogger.log_event(self.data_manager, self.battle_id, 'Death', actor_id=self.actor_id, event_description=f'Персонаж {self.actor_id} погибает...')
         self.clear_tactical_status()
-        self.get_statuses().clear_statuses()
+        self.status().dead_clear(self.actor_id)
         self.clear_targets()
         self.clear_ap()
         self.delete_all_actor_sounds()
@@ -3045,8 +3112,8 @@ class Actor(DataModel):
     def get_team(self) -> BattleTeam | None:
         return BattleTeam(self.team_id, data_manager=self.data_manager) if self.team_id else None
 
-    def get_ap(self) -> ActionPoints:
-        return ActionPoints.character_ap(self.actor_id, data_manager=self.data_manager)
+    def get_ap(self) -> 'APManager':
+        return APManager(self.actor_id, data_manager=self.data_manager)
 
     def check_skill(self, skill: str, difficulty: int = None):
         return Skill(self.actor_id, skill, data_manager=self.data_manager).skill_check(difficulty)
@@ -3068,6 +3135,11 @@ class Actor(DataModel):
             return 0
         else:
             return skills.get(capacity, 0) if skills.get(capacity, None) is not None else 0
+
+    def get_capacity_or_armor_skill(self, capacity:str) -> int:
+        body_capacity = self.get_capacity(capacity) if self.get_capacity(capacity) is not None else 0
+        armor_skill = self.get_armor_skill(capacity) if self.get_armor_skill(capacity) is not None else 0
+        return max(body_capacity, armor_skill)
 
     def get_weapon(self) -> Item | None:
         motorics = self.get_capacity('Manipulation')
@@ -3093,11 +3165,10 @@ class Actor(DataModel):
         else:
             return body
 
-    def get_statuses(self) -> ActorTacticalStatus:
-        return ActorTacticalStatus(self, self.event_manager)
-
     def ap_use(self, ap:int) -> bool:
-        result = self.ap.use(ap)
+        if not ap:
+            ap = 0
+        result = self.ap.action_use(ap)
         if result:
             self.get_body().bleeding(ap)
 
@@ -3139,9 +3210,13 @@ class Actor(DataModel):
         race_disguise = Race(self.get_body().get_character_race(), data_manager=self.data_manager).natural_disguise
         object_disguise = self.get_object().object_type.coverage if self.object_id is not None else 0
         stealth_skill_value = self.get_skill('Stealth')
-        stealth_modificator = 1 + stealth_skill_value * 0.005
+        stealth_modificator = 0.75 + stealth_skill_value * 0.005
+        stealth_armor_skill = self.get_armor_skill('Stealth')
+        stealth_capacity = self.get_capacity('Stealth')
 
-        total_disguise = (clothes_disguise + race_disguise + object_disguise) * stealth_modificator
+        total_armor_factor = (stealth_armor_skill + clothes_disguise) / 2 if stealth_armor_skill >= clothes_disguise else clothes_disguise
+
+        total_disguise = (total_armor_factor + max(race_disguise, stealth_capacity) + object_disguise) * stealth_modificator
 
         return round(total_disguise, 2)
 
@@ -3196,34 +3271,40 @@ class Actor(DataModel):
 
     @actor_status()
     @log_battle_event('Персонаж перезаряжает своё оружие')
-    def reload(self, ammo_id:str = None) -> ResponsePool:
+    def reload(self, ammo_id:str = None) -> 'ActionManager':
         from ArbWeapons import Weapon
         from ArbAmmo import Ammunition
 
+        log = self.AM()
+
         weapon_item = self.get_weapon()
         if not weapon_item:
-            return ResponsePool(Response(False, 'У вас нет оружия для перезарядки', 'Перезарядка'))
+            log.action('Перезарядка', 'У вас нет оружия для перезарядки', RespondIcon.failure())
+            return log
 
         weapon = Weapon(weapon_item.item_id, data_manager=self.data_manager)
         if weapon.weapon_class == 'ColdSteel':
-            return ResponsePool(Response(False, 'Ваше оружие невозможно перезарядить', 'Перезарядка'))
+            log.action('Перезарядка', 'Ваше оружие невозможно перезарядить', RespondIcon.failure())
+            return log
 
         cost = weapon.reload_ap_cost
         ap_usage = self.ap_use(cost)
 
         if not ap_usage:
-            return ResponsePool(Response(False, 'У вас не хватает очков действия для перезарядки', 'Перезарядка'))
+            log.action('Перезарядка', 'У вас не хватает очков действия для перезарядки', RespondIcon.info())
+            return log
 
         reload_success = weapon.reload(ammo_id)
 
         if not reload_success:
-            return ResponsePool(Response(False, f'Вы не смогли перезарядить оружие...', 'Перезарядка'))
+            log.action('Перезарядка', f'Вы не смогли перезарядить оружие...', RespondIcon.info())
+            return log
 
         equiped_ammo = Ammunition(weapon.get_current_ammotype(), data_manager=self.data_manager)
-        text = f'''
--# Нажав на фиксатор магазина и выкинув разряженную обойму на землю, попутно доставая второй рукой новую из подсумки. Как только старая обойма вышла из гнезда магазина, вы вставили новую обойму **{equiped_ammo.label}** **(Калибр: {equiped_ammo.caliber}, Тип: {equiped_ammo.type})**, и, зафиксировав ее, вы передергиваете затвор своего оружия - **{weapon.label}**
+        text = f'''-# Нажав на фиксатор магазина и выкинув разряженную обойму на землю, попутно доставая второй рукой новую из подсумки. Как только старая обойма вышла из гнезда магазина, вы вставили новую обойму **{equiped_ammo.label}** **(Калибр: {equiped_ammo.caliber}, Тип: {equiped_ammo.type})**, и, зафиксировав ее, вы передергиваете затвор своего оружия - **{weapon.label}**
 '''
-        return ResponsePool(Response(True, text, 'Перезарядка'))
+        log.action('Перезарядка', f'{text}', RespondIcon.success())
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж обнаруживает звук')
@@ -3232,97 +3313,114 @@ class Actor(DataModel):
 
     @actor_status()
     @log_battle_event('Персонаж переходит в режим ожидания, перенося свои ОД на свой следующий ход')
-    def waiting(self) -> ResponsePool:
+    def waiting(self) -> 'ActionManager':
+        log = self.AM()
         current_ap = self.ap.ap
         self.set_ap_bonus(current_ap)
         self.clear_ap()
-        return ResponsePool(Response(True, f'Вы ожидаете следующей возможности для действий и завершаете свой ход...', 'Ожидание'))
+        log.action('Ожидание', f'Вы ожидаете следующей возможности для действий и завершаете свой ход...')
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж начинает охоту на другого персонажа')
-    def set_hunt(self, enemy_id: int) -> ResponsePool:
+    def set_hunt(self, enemy_id: int) -> 'ActionManager':
         from ArbWeapons import Weapon
-
+        log = self.AM()
         weapon = self.get_weapon()
 
         if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['SR', 'AR', 'PST', 'TUR']:
-            return ResponsePool(Response(False, f'У вас нет оружия дальнего боя подходящего для охоты на противника или ваши конечности слишком повреждены чтобы стрелять', 'Невозможно охотиться'))
+            log.action('Невозможно охотиться', f'У вас нет оружия дальнего боя подходящего для охоты на противника или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.info())
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
 
-        if ap_usage:
-            self.clear_tactical_status()
-            self.data_manager.update('CHARS_COMBAT', {'hunted': enemy_id}, f'id = {self.actor_id}')
+        if not ap_usage:
+            log.action('Невозможно охотиться', f'У вас не хватает очков действий для совершения действия', RespondIcon.failure())
+            return log
 
-            return ResponsePool(Response(True, f'Вы наводитесь на противника и внимательно следите за его действиями, чтобы нанести атаку в удачный момент', 'Охота'))
-        else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно охотиться'))
+
+        self.clear_tactical_status()
+        self.data_manager.update('CHARS_COMBAT', {'hunted': enemy_id}, f'id = {self.actor_id}')
+        log.action('Охота', f'Вы наводитесь на {Actor.get_actor_character(enemy_id).name} и внимательно следите за его действиями, чтобы нанести атаку в удачный момент', RespondIcon.success())
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж начинает подавлять укрытие')
-    def set_suppression(self, cover_id: int) -> ResponsePool:
+    def set_suppression(self, cover_id: int) -> 'ActionManager':
         from ArbWeapons import Weapon
+
+        log = self.AM()
 
         weapon = self.get_weapon()
 
         if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR']:
-            return ResponsePool(Response(False,f'У вас нет оружия дальнего боя подходящего для подавления укрытия или ваши конечности слишком повреждены чтобы стрелять', 'Невозможно подавлять'))
+            log.action('Невозможно подавлять', f'У вас нет оружия дальнего боя подходящего для подавления укрытия или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.failure())
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
 
-        if ap_usage:
-            self.clear_tactical_status()
-            self.data_manager.update('CHARS_COMBAT', {'supressed': cover_id}, f'id = {self.actor_id}')
+        if not ap_usage:
+            log.action('Невозможно подавлять', f'У вас не хватает очков действий для совершения действия', RespondIcon.failure())
+            return log
 
-            return ResponsePool(Response(True, f'Вы наводитесь на укрытие и начинаете подавлять его огнём не давая возможному противнику шанса высунуться без последствий','Подавление'))
-        else:
-            return ResponsePool(
-                Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно подавлять'))
+        self.clear_tactical_status()
+        self.data_manager.update('CHARS_COMBAT', {'supressed': cover_id}, f'id = {self.actor_id}')
+
+        log.action('Подавление', f'Вы наводитесь на укрытие и начинаете подавлять его огнём не давая возможному противнику шанса высунуться без последствий', RespondIcon.success())
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж начинает подавлять слой')
-    def set_containment(self, layer_id: int) -> ResponsePool:
+    def set_containment(self, layer_id: int) -> 'ActionManager':
         from ArbWeapons import Weapon
 
+        log = self.AM()
         weapon = self.get_weapon()
 
         if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR']:
-            return ResponsePool(Response(False,f'У вас нет оружия дальнего боя подходящего для сдерживания слоя или ваши конечности слишком повреждены чтобы стрелять', 'Невозможно сдерживать'))
+            log.action('Невозможно сдерживать', f'У вас нет оружия дальнего боя подходящего для сдерживания слоя или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.info())
+            return log
 
         if layer_id not in [self.layer_id-1, self.layer_id+1, self.layer_id]:
-            return ResponsePool(Response(False, f'Вы можете сдерживать только текущий слой и ближайшие слои', 'Невозможно сдерживать'))
+            log.action('Невозможно сдерживать', f'Вы можете сдерживать только текущий слой и ближайшие слои', RespondIcon.info())
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
 
-        if ap_usage:
-            self.clear_tactical_status()
-            self.data_manager.update('CHARS_COMBAT', {'contained': layer_id}, f'id = {self.actor_id}')
+        if not ap_usage:
+            log.action('Невозможно сдерживать', f'У вас не хватает очков действий для совершения действия', RespondIcon.info())
+            return log
 
-            return ResponsePool(Response(True, f'Вы наводитесь и открываете выборочный огонь по всему слою, не давая противнику шанса продвинуться ближе к вам без последствий','Сдерживание'))
-        else:
-            return ResponsePool(
-                Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно сдерживать'))
+        self.clear_tactical_status()
+        self.data_manager.update('CHARS_COMBAT', {'contained': layer_id}, f'id = {self.actor_id}')
+
+        log.action('Сдерживание', f'Вы наводитесь и открываете выборочный огонь по всему слою, не давая противнику шанса продвинуться ближе к вам без последствий')
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж переходит в режим дозора')
-    def set_overwatch(self) -> ResponsePool:
+    def set_overwatch(self) -> 'ActionManager':
         from ArbWeapons import Weapon
-
+        log = self.AM()
         weapon = self.get_weapon()
 
         if not weapon:
-            return ResponsePool(Response(False,f'У вас нет оружия дальнего боя для дозора или ваши конечности слишком повреждены чтобы стрелять', 'Дозор невозможен'))
+            log.action('Дозор невозможен',
+                       f'У вас нет оружия дальнего боя подходящего для сдерживания слоя или ваши конечности слишком повреждены чтобы стрелять',
+                       RespondIcon.info())
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
 
-        if ap_usage:
-            self.clear_tactical_status()
-            self.data_manager.update('CHARS_COMBAT', {'ready': 1}, f'id = {self.actor_id}')
+        if not ap_usage:
+            log.action('Дозор невозможен', f'У вас не хватает очков действий для совершения действия',
+                       RespondIcon.info())
+            return log
 
-            return ResponsePool(Response(True, f'Вы внимательно оглядываетесь по сторонам в ожидании атаки противника...','Дозор'))
-        else:
-            return ResponsePool(
-                Response(False, f'У вас не хватает очков действий для совершения действия', 'Дозор невозможен'))
+        self.clear_tactical_status()
+        self.data_manager.update('CHARS_COMBAT', {'ready': 1}, f'id = {self.actor_id}')
+        log.action('Дозор', f'Вы внимательно оглядываетесь по сторонам в ожидании атаки противника...', RespondIcon.success())
+        return log
 
     def check_enemy_id(self, enemy_id: int) -> bool:
         if self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {enemy_id} AND battle_id = {self.battle_id}'):
@@ -3332,40 +3430,41 @@ class Actor(DataModel):
 
     @actor_status()
     @log_battle_event('Персонаж наводится на новую цель')
-    def set_target(self, target_id:int) -> ResponsePool:
-        if self.get_melee_target():
-            return ResponsePool(Response(False,
-                                         f'Вы находитесь в ближнем бою и не можете выбрать другую цель!',
-                                         'Ближний бой'))
+    def set_target(self, target_id:int) -> 'ActionManager':
+        log = self.AM()
+
+        melees = self.status().melees
+        if melees or self.get_melee_target():
+            log.action('Ближний бой', f'Персонаж **{self.get_character().name}** находится в ближнем бою и не может прицелиться', RespondIcon.failure())
+            return log
 
         if not self.check_enemy_id(target_id):
-            return ResponsePool(Response(False,
-                                         f'Данного персонажа нет в бою, вы не можете сделать его целью',
-                                         'Цель'))
+            log.action('Цель', 'Персонажа с данным ID нет в текущем бою, вы не можете сделать его своей целью', RespondIcon.failure())
+            return log
 
         self.data_manager.update('CHARS_COMBAT', {'target': target_id}, f'id = {self.actor_id}')
-        return ResponsePool(Response(True, f'Вы наводитесь на предполагаемое местоположение противника и готовы к атаке', 'Цель'))
+        log.action('Прицеливание', 'Вы наводитесь на предполагаемое местоположение противника и готовы к атаке', RespondIcon.success())
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж навязывает ближний бой противнику')
-    def set_melee_target(self, target_id:int) -> ResponsePool:
+    def set_melee_target(self, target_id:int) -> 'ActionManager':
+        log = self.AM()
+
         if not self.check_enemy_id(target_id):
-            return ResponsePool(Response(False,
-                                         f'Данного персонажа нет в бою, вы не можете сделать его целью ближнего боя',
-                                         'Ближний бой'))
+            log.action('Ближний бой', 'Персонажа с данным ID нет в текущем бою, вы не можете с ним сблизиться', RespondIcon.failure())
+            return log
 
         if not self.data_manager.check('BATTLE_CHARACTERS', f'character_id = {target_id} AND layer_id = {self.layer_id}'):
-            return ResponsePool(Response(False,
-                                         f'Вы не находитесь рядом с этим персонажем и не можете навязать ему ближний бой',
-                                         'Ближний бой'))
+            log.action('Ближний бой', 'Цель находится слишком далеко, вы не можете с ней сблизиться!', RespondIcon.failure())
+            return log
 
         if Actor(target_id, data_manager=self.data_manager).fly_height != self.fly_height:
             fly_capacity = self.get_capacity('Flying')
             fly_armor_skill = self.get_armor_skill('Flying')
             if not fly_capacity and not fly_armor_skill:
-                return ResponsePool(Response(False,
-                                             f'Противник находится в воздухе и вы не можете подняться выше...',
-                                             'Ближний бой'))
+                log.action('Ближний бой', f'Противник находится в воздухе и вы не можете подняться выше...', RespondIcon.failure())
+                return log
             else:
                 ActorMovement(self).set_fly_height(Actor(target_id, data_manager=self.data_manager).fly_height)
 
@@ -3373,27 +3472,32 @@ class Actor(DataModel):
 
         ap_usage = self.ap_use(1) if target_id not in melee_targets else True
 
-        if ap_usage:
-            self.clear_tactical_status()
-            self.clear_targets()
-            event = MoveEvent(self, self.layer_id)
-            responses = self.get_statuses().handle_event('move', event)
+        if not ap_usage:
+            log.action('Ближний бой', f'У вас не хватает очков действия для совершения действия', RespondIcon.failure())
+            return log
 
-            self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {self.actor_id}')
-            self.data_manager.update('CHARS_COMBAT', {'melee_target': target_id}, f'id = {self.actor_id}')
-            Actor(target_id, data_manager=self.data_manager).clear_tactical_status()
-            self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {target_id}')
-            self.data_manager.update('CHARS_COMBAT', {'melee_target': self.actor_id}, f'id = {target_id}')
+        log.log = self.status().trigger_melees(log.log)
+        log.log = self.status().trigger_suppressors(log.log)
 
-            responses.append(Response(True, f'Вы сближаетесь с противником ``{target_id}`` и навязываете ему ближний бой!', 'Ближний бой'))
-            return ResponsePool(responses)
-        else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Ближний бой'))
+        self.clear_tactical_status()
+        self.clear_targets()
+
+        self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {self.actor_id}')
+        self.data_manager.update('CHARS_COMBAT', {'melee_target': target_id}, f'id = {self.actor_id}')
+        Actor(target_id, data_manager=self.data_manager).clear_tactical_status()
+        self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {target_id}')
+        self.data_manager.update('CHARS_COMBAT', {'melee_target': self.actor_id}, f'id = {target_id}')
+
+        log.action('Ближний бой',f'{self.get_character().name} сближается с ``{self.get_actor_character(target_id).name}`` и навзяывает ему ближний бой', RespondIcon.success())
+
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж сбегает из ближнего боя')
     def flee_from_melee(self):
-        return ActorMovement(self).flee_from_melee()
+        log = self.AM()
+        log.log = ActorMovement(self).flee_from_melee(log)
+        return log
 
     def get_target(self) -> int | None:
         target = self.data_manager.select_dict('CHARS_COMBAT', filter=f'id = {self.actor_id}')[0].get('target', None)
@@ -3415,325 +3519,642 @@ class Actor(DataModel):
         else:
             return []
 
+    def AM(self):
+        log = ActionManager(self.actor_id, data_manager=self.data_manager)
+        return log
+
+    def status(self):
+        return StatusManager(self.actor_id, data_manager=self.data_manager)
+
     @actor_status()
     @log_battle_event('Персонаж использует своё оружие для дальней атаки')
-    def range_attack(self, enemy_id: int = None) -> ResponsePool:
+    def range_attack(self, enemy_id: int = None) -> 'ActionManager':
         from ArbWeapons import Weapon
+        log = self.AM()
 
         enemy_id = self.get_target() if enemy_id is None else enemy_id
-        if not enemy_id:
-            return ResponsePool(Response(False, f'У вас нет цели для атаки!', 'Невозможно стрелять'))
+        if enemy_id is None:
+            log.action('Стрельба невозможна', 'У персонажа нет активной цели для атаки', RespondIcon.failure())
+            return log
 
         weapon = self.get_weapon()
 
         if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class == 'ColdSteel':
-            return ResponsePool(Response(False, f'У вас нет оружия дальнего боя для совершения атаки или ваши конечности слишком повреждены чтобы стрелять', 'Невозможно стрелять'))
+            log.action('Стрельба невозможна', 'У персонажа нет оружия дальнего боя для совершения атаки или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.failure())
+            return log
 
-        melee_from = self.get_melee_target_from()
+        status = self.status()
+
+        melee_from = status.melees
+        print(Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class, Weapon(weapon.item_id, data_manager=self.data_manager))
         if (melee_from or self.get_melee_target()) and Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['PST', 'SG', 'SMG']:
-            return ResponsePool(Response(False, f'Вы не можете стрелять из данного оружия пока находитесь в ближнем бою!', 'Невозможно стрелять'))
+            log.action('Стрельба невозможна',
+                       'Персонаж не может стрелять из данного оружия пока находится в ближнем бою',
+                       RespondIcon.failure())
+            log.log = self.status().trigger_melees(log.log)
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
 
-        if ap_usage:
-            event = AttackEvent(self, enemy_id)
-            responses = self.get_statuses().handle_event('attack', event)
-            attack_result = RangeAttack(self, weapon.item_id, data_manager=self.data_manager).attack(enemy_id)
+        if not ap_usage:
+            log.action('Стрельба невозможна', 'Персонажу не хватает очков действия для совершения данного действия', RespondIcon.failure())
+            return log
+        print('ДО ТРИГГЕРА', log.log)
+        log.log = self.status().trigger_hunters(log.log)
+        log.log = self.status().trigger_suppressors(log.log)
+        print('ПОСЛЕ ТРИГГЕРА', log.log)
 
-            if attack_result.success:
-                responses.append(Response(True, f'Вы открываете огонь из {weapon.label} по противнику ``{enemy_id}``!', 'Стрельба!'))
-            else:
-                responses.append(Response(False, f'Вы готовитесь к атаке из {weapon.label} по противнику ``{enemy_id}`` но вам не удается это сделать.', 'Неудачная стрельба'))
+        print(log.__dict__)
 
-            if self.is_enemy_dead(enemy_id):
-                responses.append(self.respond_if_enemy_dead())
+        overwatch_response = status.trigger_overwatch(enemy_id, self.actor_id, log)
+        print('ДОЗОР:', overwatch_response)
+        if overwatch_response:
+            log.log = overwatch_response
+            return log
 
-            return ResponsePool(responses)
+        log = log
+        print(log.__dict__)
+
+        attack_result = RangeAttack(self, weapon.item_id, data_manager=self.data_manager).attack(enemy_id)
+
+        if attack_result:
+            log.action('Стрельба', f'Вы открываете огонь из {weapon.label} по ``{Actor.get_actor_character(enemy_id).name}``!', RespondIcon.success())
         else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно стрелять'))
+            log.action('Неудачная стрельба',
+                       f'Вы открываете огонь из {weapon.label} по ``{Actor.get_actor_character(enemy_id).name}``, но она не увенчалась успехом',
+                       RespondIcon.failure())
+
+        if self.is_enemy_dead(enemy_id):
+            log.log.response_to_respond(self.respond_if_enemy_dead())
+
+        print(log.__dict__)
+        return log
+
 
     @actor_status()
     @log_battle_event('Персонаж использует оружие для атаки в ближнем бою')
-    def melee_attack(self, enemy_id:int = None) -> ResponsePool:
+    def melee_attack(self, enemy_id:int = None) -> 'ActionManager':
         from ArbWeapons import Weapon
 
-        melee_from = self.get_melee_target_from()
+        log = self.AM()
+
+        melee_from = self.status().melees
         if enemy_id not in melee_from or enemy_id is None:
             enemy_id = self.get_melee_target()
 
         if not enemy_id:
-            return ResponsePool(Response(False, f'У вас нет целей для атаки в ближнем бою!', 'Невозможно атаковать'))
+            log.action('Атака невозможна', 'У персонажа нет целей для атаки в ближнем бою', RespondIcon.failure())
+            return log
 
         weapon = self.get_weapon()
         if not weapon:
-            return ResponsePool(Response(False, f'У вас нет оружия для совершения атаки или ваши конечности слишком повреждены чтобы совершить атаку', 'Невозможно атаковать'))
+            log.action('Атака невозможна', 'У персонажа нет оружия для совершения атаки или его конечности слишком повреждены чтобы совершить атаку', RespondIcon.failure())
+            return log
 
         ap_usage = self.ap_use(Weapon(weapon.item_id, data_manager=self.data_manager).action_points)
-        if ap_usage:
-            event = AttackEvent(self, enemy_id)
-            responses = self.get_statuses().handle_event('melee_attack', event)
-            attack_result = MeleeAttack(self, weapon.item_id, data_manager=self.data_manager).attack(enemy_id)
-            if attack_result.success:
-                responses.append(Response(True, f'Вы атакуете противника ``{enemy_id}`` при помощи {weapon.label} в ближнем бою!', 'Ближний бой!'))
-            else:
-                responses.append(Response(False, f'Вы готовитесь к ближней атаке противника ``{enemy_id}`` но вам не удается это сделать.', 'Неудачный ближний бой'))
+        if not ap_usage:
+            log.action('Невозможно атаковать', 'У персонажа недостаточно очков действия для совершения атаки', icon=RespondIcon.failure())
+            return log
 
-            if self.is_enemy_dead(enemy_id):
-                responses.append(self.respond_if_enemy_dead())
 
-            return ResponsePool(responses)
+        log.log = self.status().trigger_melees()
+        attack_result = MeleeAttack(self, weapon.item_id, data_manager=self.data_manager).attack(enemy_id)
+        if attack_result.success:
+            log.action('Ближний бой', f'{self.get_character().name} атакует ``{Actor.get_actor_character(enemy_id).name}`` при помощи {weapon.label} в ближнем бою!', RespondIcon.success())
         else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно атаковать'))
+            log.action('Ближний бой', f'{self.get_character().name} атакует ``{Actor.get_actor_character(enemy_id).name}`` при помощи {weapon.label} в ближнем бою, но атака не увенчалась успехом', RespondIcon.failure())
+
+        if self.is_enemy_dead(enemy_id):
+            log.log.response_to_respond(self.respond_if_enemy_dead())
+
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж использует расовую атаку')
-    def race_attack(self, enemy_id: int = None, race_attack: str=None) -> ResponsePool:
+    def race_attack(self, enemy_id: int = None, race_attack: str=None) -> 'ActionManager':
         from ArbWeapons import RaceAttack
+
+        log = self.AM()
 
         enemy_id = self.get_melee_target() if enemy_id is None else enemy_id
         enemy_id = self.get_target() if enemy_id is None else enemy_id
 
         if not enemy_id:
-            return ResponsePool(Response(False, f'У вас нет цели для атаки!', 'Невозможно атаковать'))
+            log.action('Атака невозможна', 'У персонажа нет целей для атаки в ближнем бою', RespondIcon.failure())
+            return log
 
 
         attacks = self.get_race_attacks(race_attack)
         if not attacks:
-            return ResponsePool(Response(False, f'У вас нет доступных атак, которые вы могли бы применить или у вас нет указанной атаки!', 'Невозможно атаковать'))
+            log.action('Невозможно атаковать', f'У вас нет доступных атак, которые вы могли бы применить или у вас нет указанной атаки!', RespondIcon.failure())
+            return log
 
         attack = random.choice(attacks)
 
         distance_to_enemy = self.calculate_total_distance(enemy_id)
         if distance_to_enemy > RaceAttack(attack, data_manager=self.data_manager).range:
-            return ResponsePool(Response(False, f'Цель находится слишком далеко для совершения расовой атаки!', 'Невозможно атаковать'))
+            log.action('Невозможно атаковать', f'Цель находится слишком далеко для совершения расовой атаки!', RespondIcon.failure())
+            return log
 
         ap_usage = self.ap_use(RaceAttack(attack, data_manager=self.data_manager).ap_cost)
 
-        if ap_usage:
-            event = AttackEvent(self, enemy_id)
-            responses = self.get_statuses().handle_event('melee_attack', event)
+        if not ap_usage:
+            log.action('Невозможно атаковать', 'У вас не хватает очков действий для совершения действи', RespondIcon.failure())
+            return log
 
-            attack_result = BodyPartAttack(self, attack, data_manager=self.data_manager).attack(enemy_id)
-            if attack_result.success:
-                responses.append(Response(True, f'Вы готовитесь к {RaceAttack(attack, data_manager=self.data_manager).label} и набрасываетесь на противника ``{enemy_id}``!', 'Атака!'))
-            else:
-                responses.append(Response(False, f'Вы готовитесь к {RaceAttack(attack, data_manager=self.data_manager).label} и набрасываетесь на противника ``{enemy_id}`` но вам не удается это сделать.', 'Неудачная атака'))
+        log.log = self.status().trigger_hunters()
+        log.log = self.status().trigger_suppressors()
 
-            if self.is_enemy_dead(enemy_id):
-                responses.append(self.respond_if_enemy_dead())
-
-            return ResponsePool(responses)
+        attack_result = BodyPartAttack(self, attack, data_manager=self.data_manager).attack(enemy_id)
+        if attack_result.success:
+            log.action('Боевой приём', f'{self.get_character().name} готовится к {RaceAttack(attack, data_manager=self.data_manager).label} и атакует ``{Actor.get_actor_character(enemy_id).name}``!', RespondIcon.success())
         else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно атаковать'))
+            log.action('Неудачный приём', f'{self.get_character().name} готовится к {RaceAttack(attack, data_manager=self.data_manager).label} и атакует ``{Actor.get_actor_character(enemy_id).name}``, но атака не увенчалась успехом!', RespondIcon.failure())
+
+        if self.is_enemy_dead(enemy_id):
+            log.log.response_to_respond(self.respond_if_enemy_dead())
+
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж бросает гранату')
-    def throw_grenade(self, enemy_id: int = None, grenade_id: int=None) -> ResponsePool:
+    def throw_grenade(self, enemy_id: int = None, grenade_id: int=None) -> 'ActionManager':
+        log = self.AM()
 
-        melee_from = self.get_melee_target_from()
+        melee_from = self.status().melees
         if melee_from or self.get_melee_target():
-            return ResponsePool(Response(False, f'Вы не можете бросить гранату находясь в ближнем бою!', 'Невозможно бросить гранату'))
+            log.action('Невозможно бросить гранату', f'Вы не можете бросить гранату находясь в ближнем бою!', RespondIcon.failure())
+            return log
 
         enemy_id = self.get_target() if enemy_id is None else enemy_id
         if not enemy_id:
-            return ResponsePool(Response(False, f'У вас нет цели для атаки!', 'Невозможно бросить гранату'))
+            log.action('Невозможно бросить гранату', 'У персонажа нет целей для броска', RespondIcon.failure())
+            return log
 
         distance_to_enemy = self.calculate_total_distance(enemy_id)
         if distance_to_enemy > 50:
-            return ResponsePool(
-                Response(False, f'Цель находится слишком далеко для броска гранаты', 'Невозможно бросить гранату'))
+            log.action('Невозможно бросить гранату', f'Цель находится слишком далеко для броска гранаты', RespondIcon.failure())
+            return log
 
         grenades = self.get_grenades(grenade_id)
         if not grenades:
-            return ResponsePool(Response(False, f'У вас нет доступных гранат для броска или у отсутствует указанная граната!', 'Невозможно бросить гранату'))
+            log.action('Невозможно бросить гранату', f'У вас нет доступных гранат для броска или у отсутствует указанная граната!', RespondIcon.failure())
+            return log
 
         ap_usage = self.ap_use(3)
 
-        if ap_usage:
-            event = AttackEvent(self, enemy_id)
-            responses = self.get_statuses().handle_event('attack', event)
-            grenade = random.choice(grenades)
-            grenade_item = Item(grenade, data_manager=self.data_manager)
-            attack_result = ThrowGrenade(self, grenade, data_manager=self.data_manager).attack(enemy_id)
-            responses.append(Response(True, f'Вы бросаете {grenade_item.label} в противника ``{enemy_id}``!', 'Бросок гранаты!'))
+        if not ap_usage:
+            log.action('Невозможно бросить гранату', 'У вас не хватает очков действия для совершения действия', RespondIcon.failure())
+            return log
 
-            if self.is_enemy_dead(enemy_id):
-                responses.append(self.respond_if_enemy_dead())
+        log.log = self.status().trigger_hunters(log.log)
+        log.log = self.status().trigger_melees(log.log)
+        log.log = self.status().trigger_suppressors(log.log)
 
-            return ResponsePool(responses)
-        else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно бросить гранату'))
+        grenade = random.choice(grenades)
+        grenade_item = Item(grenade, data_manager=self.data_manager)
+        attack_result = ThrowGrenade(self, grenade, data_manager=self.data_manager).attack(enemy_id)
+
+        log.action('Бросок гранаты', f'{self.get_character().name} бросает {grenade_item.label} на позицию ``{Actor.get_actor_character(enemy_id).name}``!', RespondIcon.success())
+
+        if self.is_enemy_dead(enemy_id):
+            log.log.response_to_respond(self.respond_if_enemy_dead())
+
+        return log
 
     @actor_status()
     @log_battle_event('Персонаж движется на другой слой')
-    def move_to_layer(self, layer_id: int) -> ResponsePool:
+    def move_to_layer(self, layer_id: int) -> 'ActionManager':
         result = ActorMovement(self).move_to_layer(layer_id)
 
         return result
 
     @actor_status()
     @log_battle_event('Персонаж движется к объекту')
-    def move_to_object(self, object_id: int) -> ResponsePool:
+    def move_to_object(self, object_id: int) -> 'ActionManager':
         result = ActorMovement(self).move_to_object(object_id)
         return result
 
     @actor_status()
     @log_battle_event('Персонаж сбегает из боя')
-    def escape(self) -> ResponsePool:
+    def escape(self) -> 'ActionManager':
         result = ActorMovement(self).escape()
         return result
 
     @actor_status()
     @log_battle_event('Персонаж взлетает')
-    def fly(self, height) -> ResponsePool:
+    def fly(self, height) -> 'ActionManager':
         return ActorMovement(self).fly(height)
 
     @actor_status()
     @log_battle_event('Персонаж взаимодействует с объектом')
-    def interact_with_object(self, enemy_id:int=None) -> ResponsePool:
+    def interact_with_object(self, enemy_id:int=None) -> 'ActionManager':
+        log = self.AM()
         object = self.get_object()
         if not object:
-            return ResponsePool(Response(False, 'Вы не находитесь рядом с объектом, с которым можно взаимодействовать', 'Взаимодействие с объектом'))
+            log.action('Взаимодействие с объектом', 'Вы не находитесь рядом с объектом, с которым можно взаимодействовать', RespondIcon.info())
+            return log
 
         ap_usage = self.ap_use(2)
 
-        if ap_usage:
-            self.make_sound('Interaction', random.randint(50, 150))
+        if not ap_usage:
+            log.action('Взаимодействовать невозможно', f'У вас не хватает очков действий для совершения действия', RespondIcon.info())
+            return log
 
-            event = ObjectEvent(self, object_id=object.id)
-            responses = self.get_statuses().handle_event('object', event)
-            result = object.interact(self.actor_id, enemy_id=enemy_id)
-            responses.append(result)
+        self.make_sound('Interaction', random.randint(50, 150))
 
-            if enemy_id:
-                if self.is_enemy_dead(enemy_id):
-                    responses.append(self.respond_if_enemy_dead())
+        log.log = self.status().trigger_melees(log.log)
+        log.log = self.status().trigger_suppressors(log.log)
+        result = object.interact(self.actor_id, enemy_id=enemy_id)
+        log.log.response_to_respond(result)
 
-            return ResponsePool(responses)
-        else:
-            return ResponsePool(Response(False, f'У вас не хватает очков действий для совершения действия', 'Невозможно взаимодействовать с объектом'))
+        if enemy_id:
+            if self.is_enemy_dead(enemy_id):
+                log.log.response_to_respond(self.respond_if_enemy_dead())
+
+        return log
+
+    @actor_status()
+    def reset_statuses(self) -> 'ActionManager':
+        log = self.AM()
+        StatusManager.clear_all_statuses(self.actor_id)
+        current_tactics = self.status().get_tactics()
+        tactics = ''
+        for tactic, value in current_tactics.items():
+            tactics += f'-# *{tactic} - **{value}***\n'
+
+        log.action('Сброс тактик', f'{self.get_character().name} прекращает использовать текущую тактику:\n{tactics}', RespondIcon.success())
+        return log
+
+    @staticmethod
+    def get_actor_character(actor_id:int):
+        from ArbCharacters import Character
+        return Character(actor_id)
 
     def __repr__(self):
         return f'Actor({self.actor_id})'
 
 
 
+class APManager:
+    def __init__(self, actor_id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager') if kwargs.get('data_manager') else DataManager()
+        self.actor_id = actor_id
+        data = self.get_ap_data()
 
+        self.ap = data.get('ap')
+        self.ap_bonus = data.get('ap_bonus')
 
+    def add_ap(self, amount:int):
+        self.ap += amount
+        self.data_manager.update('CHARS_COMBAT', {'ap': self.ap}, f'id = {self.actor_id}')
+        return self.ap
 
+    def add_ap_bonus(self, amount:int):
+        self.ap_bonus += amount
+        self.data_manager.update('CHARS_COMBAT', {'ap_bonus': self.ap_bonus}, f'id = {self.actor_id}')
+        return self.ap_bonus
 
+    def convert_ap_to_bonus(self):
+        self.ap_bonus += self.ap
+        self.data_manager.update('CHARS_COMBAT', {'ap': 0, 'ap_bonus': self.ap_bonus}, f'id = {self.actor_id}')
+        self.ap = 0
+        return self.ap_bonus
 
-
-class AttackEvent(Event):
-    def __init__(self, actor: 'Actor', target):
-        super().__init__(actor)
-        self.target = target
-
-
-class MoveEvent(Event):
-    def __init__(self, actor: 'Actor', layer):
-        super().__init__(actor)
-        self.layer = layer
-
-
-class ObjectEvent(Event):
-    def __init__(self, actor: 'Actor', object_id):
-        super().__init__(actor)
-        self.object_id = object_id
-
-
-class HuntHandler(EventHandler):
-    def handle(self, event: AttackEvent | ObjectEvent):
-        if isinstance(event, AttackEvent | ObjectEvent):
-            responses = []
-
-            for hunter in self.actors:
-                weapon = hunter.get_weapon()
-                if weapon:
-                    attack_result = RangeAttack(hunter, weapon.item_id, data_manager=hunter.data_manager).attack(event.source.actor_id)
-                    if attack_result.success:
-                        response = Response(False, f'Противник ``{hunter.actor_id}``, который следил за вашими действиями, атаковал вас!', 'Охота!')
-                        responses.append(response)
-                        responses.append(attack_result)
-                hunter.data_manager.update('CHARS_COMBAT', {'hunted': None}, f'id = {hunter.actor_id}')
-
-            return responses
+    def action_use(self, cost:int):
+        if self.ap >= cost:
+            self.ap -= cost
+            self.data_manager.update('CHARS_COMBAT', {'ap': self.ap}, f'id = {self.actor_id}')
+            return True
         else:
+            return False
+
+    def check_record(self):
+        if not self.data_manager.check('CHARS_COMBAT', f'id = {self.actor_id}'):
+            query = {
+                'id': self.actor_id,
+                'ap': 0,
+                'ap_bonus': 0
+            }
+            self.data_manager.insert('CHARS_COMBAT', query)
+
+    def get_ap_data(self):
+        self.check_record()
+        return self.data_manager.select_dict('CHARS_COMBAT', filter=f'id = {self.actor_id}')[0]
+
+
+
+
+
+
+
+class StatusManager(DataModel):
+    def __init__(self, actor_id:int, **kwargs):
+        self.data_manager = kwargs.get('data_manager') if kwargs.get('data_manager') else DataManager()
+        self.actor_id = actor_id
+        StatusManager.check_record(self.actor_id)
+        DataModel.__init__(self, 'CHARS_COMBAT', f'id = {actor_id}', data_manager=self.data_manager)
+
+        self.suppressing_cover = self.get('supressed', None)
+        self.hunting_target = self.get('hunted', None)
+        self.is_overwatching = self.get('ready', False)
+        self.containing_layer = self.get('contained', None)
+
+        self.suppressors = StatusManager.get_actor_suppressors(self.actor_id, data_manager=self.data_manager)
+        self.hunters = StatusManager.get_actor_hunters(self.actor_id, data_manager=self.data_manager)
+        self.containers = StatusManager.get_actor_containers(self.actor_id, data_manager=self.data_manager)
+        self.melees = StatusManager.get_actor_melee(self.actor_id, data_manager=self.data_manager)
+
+    def get_tactics(self):
+        tactics = {}
+        if self.suppressing_cover is not None:
+            tactics['Подавление'] = GameObject(self.suppressing_cover).__str__()
+        if self.hunting_target is not None:
+            tactics['Охота'] = Actor.get_actor_character(self.hunting_target).name
+        if self.is_overwatching is not None:
+            tactics['Дозор'] = 'Активен'
+        if self.containing_layer is not None:
+            tactics['Сдерживание'] = Layer(self.containing_layer, Actor(self.actor_id, data_manager=self.data_manager).battle_id).__str__()
+
+        return tactics
+
+    def range_trigger(self, enemy_id:int, target_id:int) -> Response:
+        enemy = Actor(enemy_id)
+        weapon = enemy.get_weapon()
+        if weapon:
+            attack_result = RangeAttack(enemy, weapon.item_id, data_manager=enemy.data_manager).attack(target_id)
+        else:
+            attack_result = Response(False, f'{enemy.get_character().name} перехватывает вас и атакует издалека, но его атака не увенчалась успехом', 'Неудачный перехват')
+
+        if attack_result:
+            return Response(False, f'{enemy.get_character().name} перехватывает вас и атакует издалека!', 'Перехват')
+        else:
+            return Response(False, f'{enemy.get_character().name} перехватывает вас и атакует издалека, но в этот момент вместо выстрелов вы слышите глухие щелчки', 'Перехват')
+
+    def melee_trigger(self, enemy_id:int, target_id:int) -> Response:
+        enemy = Actor(enemy_id)
+        weapon = enemy.get_weapon()
+        if weapon:
+            attack_result = MeleeAttack(enemy, weapon.item_id, data_manager=enemy.data_manager).attack(target_id)
+        else:
+            attack_result = BodyPartAttack(enemy, random.choice(enemy.get_race_attacks()), data_manager=enemy.data_manager).attack(target_id)
+
+        if attack_result:
+            return Response(False, f'{enemy.get_character().name} воспользовавшись моментом атакует вас в ближнем бою!', 'Ближний бой')
+        else:
+            return Response(False, f'{enemy.get_character().name} воспользовавшись моментом атакует вас в ближнем бою, но его атака провалилась', 'Ближний бой')
+
+    def trigger_hunters(self, respond_log: RespondLog = None) -> RespondLog:
+        respond_log = respond_log if respond_log else RespondLog(self.data_manager,
+                                                                 footer=Actor(self.actor_id, data_manager=self.data_manager).get_character().name,
+                                                                 footer_logo=Actor(self.actor_id, data_manager=self.data_manager).get_character().picture)
+
+        if not self.hunters:
+            return respond_log
+
+        for hunter_id in self.hunters:
+            result = self.range_trigger(hunter_id, self.actor_id)
+            respond_log.response_to_respond(result, 'Охота', RespondIcon.danger())
+            StatusManager.clear_hunt(hunter_id)
+
+        return respond_log
+
+    def trigger_suppressors(self, respond_log: RespondLog = None) -> RespondLog:
+        respond_log = respond_log if respond_log else RespondLog(self.data_manager,
+                                                                 footer=Actor(self.actor_id, data_manager=self.data_manager).get_character().name,
+                                                                 footer_logo=Actor(self.actor_id, data_manager=self.data_manager).get_character().picture)
+
+        if not self.suppressors:
+            return respond_log
+
+        for suppressor_id in self.suppressors:
+            result = self.range_trigger(suppressor_id, self.actor_id)
+            respond_log.response_to_respond(result, 'Подавление', RespondIcon.danger())
+
+        return respond_log
+
+    def trigger_containers(self, respond_log: RespondLog = None) -> RespondLog:
+        respond_log = respond_log if respond_log else RespondLog(self.data_manager,
+                                                                 footer=Actor(self.actor_id, data_manager=self.data_manager).get_character().name,
+                                                                 footer_logo=Actor(self.actor_id, data_manager=self.data_manager).get_character().picture)
+
+        if not self.containers:
+            return respond_log
+
+        for container_id in self.containers:
+            result = self.range_trigger(container_id, self.actor_id)
+            respond_log.response_to_respond(result, 'Сдерживание', RespondIcon.danger())
+
+        return respond_log
+
+    def trigger_melees(self, respond_log: RespondLog = None) -> RespondLog:
+        respond_log = respond_log if respond_log else RespondLog(self.data_manager,
+                                                                 footer=Actor(self.actor_id, data_manager=self.data_manager).get_character().name,
+                                                                 footer_logo=Actor(self.actor_id, data_manager=self.data_manager).get_character().picture)
+
+        if not self.melees:
+            return respond_log
+
+        for melee_id in self.melees:
+            result = self.melee_trigger(melee_id, self.actor_id)
+            respond_log.response_to_respond(result, 'Ближний бой', RespondIcon.danger())
+
+        return respond_log
+
+    @staticmethod
+    def clear_all_statuses(actor_id:int):
+        query = {'hunted': None,
+                 'supressed': None,
+                 'contained': None,
+                 'ready': None}
+        db = DataManager()
+        db.update('CHARS_COMBAT', query, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_target(actor_id:int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'target': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_melee_target(actor_id:int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'melee_target': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def trigger_overwatch(actor_id:int, attacker_id:int, log: 'ActionManager'):
+        db = DataManager()
+        data = db.select_dict('CHARS_COMBAT', filter=f'id = {actor_id}')
+        if not data:
+            StatusManager.check_record(actor_id)
+
+        data = data[0]
+        is_ready = int(data.get('ready', False)) if data.get('ready', False) else False
+        print('СТАТУС ДОЗОРА:', is_ready)
+        if is_ready:
+            StatusManager.clear_overwatch(actor_id)
+            enemy = Actor(actor_id)
+            weapon = enemy.get_weapon()
+
+            attack_result = RangeAttack(enemy, weapon.item_id, data_manager=enemy.data_manager).attack(attacker_id)
+            if not attack_result:
+                return None
+            log.action(f'Дозор противника',f'{enemy.get_character().name}, находясь в дозоре, перехватывает вас и атакует издалека!', RespondIcon.danger())
+            return log.log
+        else:
+            return None
+
+    @staticmethod
+    def check_record(actor_id:int):
+        db = DataManager()
+        if not db.check('CHARS_COMBAT', f'id = {actor_id}'):
+            query = {'id': actor_id, 'ap': 0, 'ap_bonus':0}
+            db.insert('CHARS_COMBAT', query)
+
+    @staticmethod
+    def get_actor_suppressors(actor_id:int, data_manager:DataManager() = None):
+        db = DataManager() if not data_manager else data_manager
+        data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
+        if not data:
+            return []
+        data = data[0]
+        if not data.get('object'):
             return []
 
+        object_id = data.get('object')
+        supressors = db.select_dict('CHARS_COMBAT', filter=f'supressed = {object_id}')
+        return [sup.get('id') for sup in supressors]
 
-class SuppresssionHandler(EventHandler):
-    def handle(self, event: AttackEvent | MoveEvent | ObjectEvent):
-        if isinstance(event, AttackEvent | MoveEvent | ObjectEvent):
-            responses = []
-            for suppressor in self.actors:
-                weapon = suppressor.get_weapon()
-                if weapon:
-                    attack_result = RangeAttack(suppressor, weapon.item_id, data_manager=suppressor.data_manager).attack(event.source.actor_id)
-                    if attack_result.success:
-                        response = Response(False, f'Противник ``{suppressor.actor_id}``, подавляющий ваше укрытия атаковал вас!', 'Подавление!')
-                        responses.append(response)
-                        responses.append(attack_result)
-
-            return responses
-        else:
+    @staticmethod
+    def get_actor_hunters(actor_id:int, data_manager: DataManager = None):
+        db = DataManager() if not data_manager else data_manager
+        data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
+        if not data:
             return []
+        data = data[0]
 
+        battle_id = data.get('battle_id')
+        potential_hunters = [i.get('character_id') for i in db.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {battle_id}')]
 
-class ContainmentHandler(EventHandler):
-    def handle(self, event: MoveEvent):
-        if isinstance(event, MoveEvent):
-            responses = []
-            for containment in self.actors:
-                weapon = containment.get_weapon()
-                if weapon:
-                    attack_result = RangeAttack(containment, weapon.item_id, data_manager=containment.data_manager).attack(event.source.actor_id)
-                    if attack_result.success:
-                        response = Response(False, f'Противник ``{containment.actor_id}`` который сдерживал огнем местность, на которой вы находитесь, атаковал вас!', 'Сдерживание!')
-                        responses.append(response)
-                        responses.append(attack_result)
+        hunters = []
+        for hunter in potential_hunters:
+            hunter_data = db.select_dict('CHARS_COMBAT', filter=f'id = {hunter}')
+            if not hunter_data:
+                continue
+            hunter_data = hunter_data[0]
+            if hunter_data.get('hunted') == actor_id:
+                hunters.append(hunter)
 
-            return responses
-        else:
+        return hunters
+
+    @staticmethod
+    def get_actor_containers(actor_id: int, data_manager: DataManager = None):
+        db = DataManager() if not data_manager else data_manager
+        data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
+        if not data:
             return []
+        data = data[0]
 
+        battle_id = data.get('battle_id')
+        layer_id = data.get('layer_id')
 
-class OverwatchHandler(EventHandler):
-    def handle(self, event: AttackEvent):
-        if isinstance(event, AttackEvent):
-            responses = []
-            for watcher in self.actors:
-                weapon = watcher.get_weapon()
-                if weapon:
-                    attack_result = RangeAttack(watcher, weapon.item_id, data_manager=watcher.data_manager).attack(event.source.actor_id)
-                    if attack_result.success:
-                        response = Response(False, f'Противник ``{watcher.actor_id}`` находился в дозоре и контратаковал вас!', 'Дозор!')
-                        responses.append(response)
-                        responses.append(attack_result)
+        potential_containers = [i.get('character_id') for i in
+                             db.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {battle_id}')]
 
-                    watcher.data_manager.update('CHARS_COMBAT', {'ready': None}, f'id = {watcher.actor_id}')
+        containers = []
+        for hunter in potential_containers:
+            hunter_data = db.select_dict('CHARS_COMBAT', filter=f'id = {hunter}')
+            if not hunter_data:
+                continue
+            hunter_data = hunter_data[0]
+            if hunter_data.get('contained') == layer_id:
+                containers.append(hunter)
 
-            return responses
-        else:
+        return containers
+
+    @staticmethod
+    def get_actor_melee(actor_id: int, data_manager: DataManager = None):
+        db = DataManager() if not data_manager else data_manager
+        data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
+        if not data:
             return []
+        data = data[0]
+
+        battle_id = data.get('battle_id')
+        potential_melee = [i.get('character_id') for i in db.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {battle_id}')]
+
+        melees = []
+        for hunter in potential_melee:
+            hunter_data = db.select_dict('CHARS_COMBAT', filter=f'id = {hunter}')
+            if not hunter_data:
+                continue
+            hunter_data = hunter_data[0]
+            if hunter_data.get('melee_target') == actor_id:
+                melees.append(hunter)
+
+        return melees
+
+    @staticmethod
+    def clear_melees(actor_id: int):
+        db = DataManager()
+        status = StatusManager(actor_id, data_manager=db)
+        for melee in status.melees:
+            status.clear_melee_target(melee)
+
+    @staticmethod
+    def clear_hunters(actor_id: int):
+        db = DataManager()
+        status = StatusManager(actor_id, data_manager=db)
+        for hunter in status.hunters:
+            db.update('CHARS_COMBAT', {'hunted': None}, f'id = {hunter}')
+
+    @staticmethod
+    def dead_clear(actor_id: int):
+        StatusManager.clear_all_statuses(actor_id)
+        StatusManager.clear_melee_target(actor_id)
+        StatusManager.clear_melees(actor_id)
+        StatusManager.clear_hunters(actor_id)
+
+    @staticmethod
+    def clear_hunt(actor_id: int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'hunted': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_contained(actor_id: int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'contained': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_suppress(actor_id: int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'supressed': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_overwatch(actor_id: int):
+        db = DataManager()
+        db.update('CHARS_COMBAT', {'ready': None}, f'id = {actor_id}')
+
+    @staticmethod
+    def clear_targeters(actor_id:int):
+        db = DataManager()
+        targeters = StatusManager.get_targeters(actor_id)
+        for t in targeters:
+            db.update('CHARS_COMBAT', {'target': None}, f'id = {t}')
+
+    @staticmethod
+    def get_targeters(actor_id:int):
+        db = DataManager()
+        targeters = db.select_dict('CHARS_COMBAT', filter=f'target = {actor_id}')
+        return [t.get('id') for t in targeters]
 
 
-class MeleeHandler(EventHandler):
-    def handle(self, event: AttackEvent | MoveEvent | ObjectEvent):
-        if isinstance(event, AttackEvent | MoveEvent | ObjectEvent):
-            responses = []
-            for actor in self.actors:
-                weapon = actor.get_weapon()
-                if weapon:
-                    attack_result = MeleeAttack(actor, weapon.item_id, data_manager=actor.data_manager).attack(event.source.actor_id)
-                else:
-                    attack_result = BodyPartAttack(actor, random.choice(actor.get_race_attacks()), data_manager=actor.data_manager).attack(event.source.actor_id)
+class ActionManager:
+    def __init__(self, actor_id:int, **kwargs):
+        self.actor_id = actor_id
+        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.log = RespondLog(self.data_manager,
+                              footer=Actor(self.actor_id, data_manager=self.data_manager).get_character().name,
+                              footer_logo=Actor(self.actor_id, data_manager=self.data_manager).get_character().picture) if not kwargs.get('log') else kwargs.get('log')
 
-                if attack_result.success:
-                    response = Response(False, f'Сдерживающий вас в ближнем бою противник ``{actor.actor_id}`` атаковал вас!', 'Ближний бой!')
-                    responses.append(response)
-                    responses.append(attack_result)
-
-            return responses
-        else:
-            return []
+    def action(self, title:str, content:str, icon: str = RespondIcon.info()):
+        self.log.add_respond(title, content, respond_icon=icon)

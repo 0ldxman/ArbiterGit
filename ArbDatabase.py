@@ -9,6 +9,7 @@ import threading
 import logging
 from typing import Any, Dict, List, Optional
 import json
+from tenacity import retry, wait_fixed, stop_after_attempt
 
 
 class Logger:
@@ -46,12 +47,13 @@ class Logger:
 
 
 class ConnectionPool:
-    def __init__(self, max_connections:int, db_name='Arbiter.db'):
+    def __init__(self, max_connections:int, db_name='Arbiter.db', timeout=10):
         self.max_connections = max_connections
         self.db_name = db_name
+        self.timeout = timeout
         self.connection_queue = Queue(max_connections)
         for _ in range(max_connections):
-            connection = sqlite3.connect(db_name)
+            connection = sqlite3.connect(db_name, timeout=self.timeout)
             self.connection_queue.put(connection)
 
     def get_connection(self):
@@ -72,12 +74,9 @@ DEFAULT_POOL = ConnectionPool(100)
 
 
 class DataManager:
-    def __init__(self, connection_pool:ConnectionPool = DEFAULT_POOL, logger:Logger = DEFAULT_LOGGER):
-        self.logger = logger
-
+    def __init__(self, connection_pool: ConnectionPool = DEFAULT_POOL, logger: Logger = DEFAULT_LOGGER):
+        self.logger = logger or Logger()
         self.connection_pool = connection_pool
-        self.name = self.connection_pool.db_name
-
         self.connection = self.connection_pool.get_connection()
         self.cursor = self.connection.cursor()
         self.transaction_started = False
@@ -91,6 +90,12 @@ class DataManager:
             self.cursor.close()
         if self.connection:
             self.connection_pool.release_connection(self.connection)
+
+    def reset_connection(self):
+        """Сбрасывает текущее соединение и переподключается."""
+        self.logger.warning("Resetting connection due to database lock or other issues")
+        self.close_connection()
+        self.open_connection()
 
     def begin_transaction(self):
         self.open_connection()
@@ -110,48 +115,54 @@ class DataManager:
             self.logger.warning("Transaction rolled back")
             self.transaction_started = False
 
+    @retry(wait=wait_fixed(2), stop=stop_after_attempt(5), reraise=True)
     def execute(self, prompt, commit=True) -> None:
         try:
             self.cursor.execute(prompt)
             if commit:
                 self.connection.commit()
-                self.logger.info("Query executed successfully")
-        except sqlite3.Error as e:
-            self.rollback_transaction()
-            self.logger.error(f"Error executing query: {prompt}, Error: {e}")
-            raise
+                self.logger.info(f"Query executed successfully: {prompt}")
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                self.logger.warning(f"Database is locked, retrying: {prompt}")
+                self.reset_connection()
+                raise e
+            else:
+                self.rollback_transaction()
+                self.logger.error(f"Error executing query: {prompt}, Error: {e}")
+                raise
 
     def select(self, table_name, columns='*', filter=None) -> list[tuple]:
         query = f"SELECT {columns} FROM {table_name}"
         if filter:
             query += f" WHERE {filter}"
-
-        self.cursor.execute(query)
+        self.execute(query, commit=False)
         result = self.cursor.fetchall()
-
         self.logger.info(f"Selected data from {table_name}")
-
         return result
 
     def selectOne(self, table_name, columns='*', filter=None) -> tuple:
         query = f"SELECT {columns} FROM {table_name}"
         if filter:
             query += f" WHERE {filter}"
-
-        self.cursor.execute(query)
+        self.execute(query, commit=False)
         result = self.cursor.fetchone()
-
         self.logger.info(f"Selected one row from {table_name}")
-
         return result
 
-    def delete(self, table_name:str, filter:str=None) -> None:
-        query = f"DELETE FROM {table_name}"
-        if filter:
-            query += f" WHERE {filter}"
+    def insert(self, table_name: str, columns_values: dict) -> None:
+        columns_str = ', '.join(columns_values.keys())
+        placeholders = ', '.join(['?'] * len(columns_values))
 
-        self.cursor.execute(query)
+        column_names = ', '.join(f'"{col}"' for col in columns_values.keys())
+
+        query = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
+        values = tuple(columns_values.values())
+
+        self.cursor.execute(query, values)
         self.connection.commit()
+
+        self.logger.info(f"Inserted data into {table_name}")
 
     def update(self, table_name: str, columns_values: dict, filter: str = None) -> None:
         set_values = []
@@ -177,19 +188,12 @@ class DataManager:
 
         self.logger.info(f"Updated data in {table_name}")
 
-    def insert(self, table_name: str, columns_values: dict) -> None:
-        columns_str = ', '.join(columns_values.keys())
-        placeholders = ', '.join(['?'] * len(columns_values))
-
-        column_names = ', '.join(f'"{col}"' for col in columns_values.keys())
-
-        query = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
-        values = tuple(columns_values.values())
-
-        self.cursor.execute(query, values)
-        self.connection.commit()
-
-        self.logger.info(f"Inserted data into {table_name}")
+    def delete(self, table_name: str, filter: str = None) -> None:
+        query = f"DELETE FROM {table_name}"
+        if filter:
+            query += f" WHERE {filter}"
+        self.execute(query)
+        self.logger.info(f"Deleted records from {table_name}")
 
     def maxValue(self, table_name: str, parameter: str, filter: str = None) -> int | float:
         if filter:
@@ -318,12 +322,52 @@ class DataManager:
         column_names = [desc[0] for desc in self.cursor.description]
         return column_names
 
+    def get_columns_desc(self, table_name:str):
+        self.cursor.execute(f"PRAGMA table_info('{table_name}')")
+        column_desc = self.cursor.fetchall()
+        print(column_desc)
+        return column_desc
+
     def get_columns_types(self, table_name:str) -> dict[str]:
         column_types = {}
         self.cursor.execute(f"SELECT name, type FROM pragma_table_info('{table_name}')")
         for row in self.cursor.fetchall():
             column_types[row[0]] = row[1]
         return column_types
+
+    def bulk_insert(self, table_name: str, columns_values_list: list[dict]):
+        if not columns_values_list:
+            return
+
+        columns_str = ', '.join(columns_values_list[0].keys())
+        placeholders = ', '.join(['?'] * len(columns_values_list[0]))
+        values_list = [tuple(item.values()) for item in columns_values_list]
+
+        query = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+
+        self.cursor.executemany(query, values_list)
+        self.connection.commit()
+
+    def raw_execute(self, query: str, params: tuple = None, fetch: str = 'all') -> list | tuple:
+        """Выполнение произвольного SQL-запроса."""
+        self.cursor.execute(query, params or ())
+        if fetch == 'all':
+            result = self.cursor.fetchall()
+        elif fetch == 'one':
+            result = self.cursor.fetchone()
+        else:
+            result = None
+        self.connection.commit()
+        return result
+
+    def bulk_insert_with_transaction(self, table_name: str, columns_values_list: list[dict]):
+        try:
+            self.begin_transaction()
+            self.bulk_insert(table_name, columns_values_list)
+            self.commit_transaction()
+        except Exception as e:
+            self.rollback_transaction()
+            raise e
 
     def __del__(self):
     #    self.cursor.close()
@@ -600,6 +644,56 @@ class DataInsert:
 
     def __contains__(self, key):
         return key in self._data
+
+
+class DataTable:
+    def __init__(self, table_name: str, data_manager: DataManager = None):
+        self._table_name = table_name
+        self._data_manager = data_manager if data_manager else DataManager()
+        self._columns = self._get_columns()
+
+    def _get_columns(self):
+        if self._table_name not in self._data_manager.get_all_tables():
+            return []
+        columns = self._data_manager.get_all_columns(self._table_name)
+        return columns
+
+    def get_record(self, filter: str):
+        data = self._data_manager.select_dict(self._table_name, filter=filter)
+        if not data:
+            return {}
+
+        return data[0]
+
+    def get_value(self, filter:str, column:str):
+        data = self.get_record(filter)
+        if not data:
+            return None
+
+        return data.get(column)
+
+    def get_all_records(self, filter:str=None):
+        data = self._data_manager.select_dict(self._table_name, filter=filter)
+        return data
+
+    def sort_records(self, field: str, reverse: bool = False):
+        pass
+
+    def aggregate_records(self, field: str, aggregate_func: str):
+        pass
+
+    def __repr__(self):
+        return f"TABLE.{self._table_name}({', '.join(self._columns)})"
+
+
+
+class Table:
+    def __init__(self, table_name:str, data_manager:DataManager = None):
+        self._table_name = table_name
+        self._data_manager = data_manager if data_manager else DataManager()
+        self._columns = self._data_manager.get_all_columns(self._table_name)
+
+
 
 
 #

@@ -22,6 +22,17 @@ class Race(DataModel):
         self.pregnancy = self.get('pregnancy')
         self.fertility = self.get('fertilit')
         self.natural_disguise = self.get('disguise')
+        race_range = self.get('race_range', '0-1')
+        self.race_range_min = int(race_range.split('-')[0])
+        self.race_range_max = int(race_range.split('-')[1])
+
+    def compare_age_and_race_range(self, age:int):
+        if age < self.race_range_min:
+            return 'Юный'
+        elif age > self.race_range_max:
+            return 'Пожилой'
+        else:
+            return 'Средних лет'
 
     def fetch_bodyparts(self):
         body_parts = [part.get('part_id') for part in self.data_manager.select_dict('RACES_BODYPART', filter=f'race = "{self.race_id}"')]

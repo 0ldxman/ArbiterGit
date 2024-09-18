@@ -27,7 +27,7 @@ class ClothesInit(DataModel):
         self.tier = self.get('tier', 0) if self.get('tier') else 0
         self.max_endurance = self.get('endurance', 100) if self.get('endurance') else 100
         self.skill = self.get('skill', None)
-        self.skill_value = self.get('value', None)
+        self.skill_value = self.get('value', None) if self.get('value') else 0
 
     def cover_bodygroups(self):
         slot = self.slot
@@ -51,7 +51,8 @@ class Clothes(Item, ClothesInit):
         return self.endurance / self.max_endurance if self.endurance < self.max_endurance else 1
 
     def armor_protection(self):
-        material_protection = self.material.protection_data()
+        material_protection = self.material.protection_data() if self.material else {}
+        print(f'ЗАЩИТА МАТЕРИАЛА {self.cloth_id}', material_protection)
 
         if not material_protection:
             return {}  # Вернуть пустой словарь, если нет информации о защите материала
@@ -71,7 +72,9 @@ class Clothes(Item, ClothesInit):
         return self.armor_protection().get(protection_id, 0)
 
     def cloth_disguise(self):
-        return self.disguise * self.material.disguise_factor * self.get_current_endurance()
+        material_factor = self.material.disguise_factor if self.material else 1
+
+        return self.disguise * material_factor * self.get_current_endurance()
 
     def cloth_skill(self):
         return self.skill, self.skill_value * self.get_current_endurance()
@@ -98,7 +101,7 @@ class CharacterArmor:
 
         for item in items:
             cloth = Clothes(item.item_id, data_manager=self.data_manager)
-            if slot not in cloth.cover_bodygroups() or 'Все тело' not in cloth.cover_bodygroups():
+            if slot not in cloth.cover_bodygroups() and 'Все тело' not in cloth.cover_bodygroups():
                 continue
             layer = cloth.layer if cloth.slot == slot else cloth.layer + 10
 
@@ -110,7 +113,7 @@ class CharacterArmor:
         items = self.get_equipment()
         skills = {}
         for item in items:
-            cloth = Clothes(item, data_manager=self.data_manager)
+            cloth = Clothes(item.item_id, data_manager=self.data_manager)
             skill, skill_value = cloth.cloth_skill()
             if skill and skill_value:
                 if skill not in skills:
@@ -122,6 +125,7 @@ class CharacterArmor:
 
     def ballistic_simulation(self, target_slot: str, damage: Damage) -> Damage | None:
         slot_armor = self.get_slot_protection(target_slot)
+        print(target_slot, slot_armor)
 
         if not slot_armor:
             return damage
@@ -129,9 +133,10 @@ class CharacterArmor:
         protection_type = damage.protection_type
         max_penetration = damage.penetration
 
-        sorted_armors = dict(sorted(slot_armor.items(), key=lambda item: item[0][0], reverse=True))
 
-        pprint.pprint(sorted_armors)
+        sorted_armors = dict(sorted(slot_armor.items(), key=lambda item: item[0][0], reverse=True))
+        print(sorted_armors)
+
         for p in sorted_armors:
             layer, armor_id = p
             protection = sorted_armors[p].get(protection_type, 0)

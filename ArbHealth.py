@@ -82,6 +82,26 @@ class Injury(DataModel):
         self.injury_type = InjuryType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
 
     @classmethod
+    def create_injury(cls, character_id:int, injury_type:str, place:str, damage:int, root:str=None, heal_efficiency:int=0, is_scar:bool=False):
+        db = DataManager()
+        id_inj = db.maxValue('CHARS_INJURY', 'id_inj') + 1
+
+        query = {
+            'id': character_id,
+            'id_inj': id_inj,
+            'place': place,
+            'type': injury_type,
+            'damage': damage,
+            'root': root,
+            'heal_efficiency': heal_efficiency,
+            'is_scar': int(is_scar)
+        }
+
+        db.insert('CHARS_INJURY', query)
+        return cls(id_inj, character_id=character_id, data_manager=db)
+
+
+    @classmethod
     def get_character_injuries(cls, character_id: int, data_manager: DataManager = None, place: str = None) -> dict[str, list['Injury']]:
         db = data_manager if data_manager is not None else DataManager()
 
@@ -131,13 +151,13 @@ class Injury(DataModel):
         return healing_bonus
 
     def roll_infection(self):
-        infection_chance = self.injury_type.infection_chance
-        healing = 150 - self.get_healing_bonus()
-
         if self.is_scar:
             return
 
-        if random.randint(1, 100) <= int(healing * infection_chance):
+        infection_chance = self.injury_type.infection_chance
+        healing = 1.5 - self.get_healing_bonus()
+
+        if random.randint(1, 100) <= int(infection_chance * healing):
             if not self.data_manager.check('CHARS_DISEASE', filter=f'id = {self.character_id} AND place = "{self.place}" AND type = "Infection"'):
                 Disease.create_character_disease(self.character_id, 'Infection', data_manager=self.data_manager, place=self.place)
 
@@ -172,6 +192,16 @@ class Injury(DataModel):
 
         return f'{label} ({self.root}){emoji}'
 
+    @staticmethod
+    def delete_all_character_injuries(character_id:int):
+        db = DataManager()
+        db.delete('CHARS_INJURY', f'id = {character_id}')
+
+    @staticmethod
+    def delete_injury(injury_id:int):
+        db = DataManager()
+        db.delete('CHARS_INJURY', f'id_inj = {injury_id}')
+
 
 class DiseaseType(DataModel):
     def __init__(self, id: str, **kwargs):
@@ -201,9 +231,9 @@ class Disease(DataModel):
         DataModel.__init__(self, f'CHARS_DISEASE', f'dis_id = {self.disease_id}', data_manager=self.data_manager)
         self.character_id = self.get('id', None)
         self.place = self.get('place') if self.get('place', None) is not None else 'Все тело'
-        self.current_severity = self.get('severity', 0)
-        self.current_immunity = self.get('immunity', 0)
-        self.healing_efficiency = self.get('healing', 0) if self.get('healing', None) is not None else 0
+        self.current_severity = round(self.get('severity', 0), 2) if self.get('severity', None) is not None else 0
+        self.current_immunity = round(self.get('immunity', 0), 2) if self.get('immunity', None) is not None else 0
+        self.healing_efficiency = round(self.get('healing', 0), 2) if self.get('healing', None) is not None else 0
 
         self.disease_type = DiseaseType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
 
@@ -262,6 +292,14 @@ class Disease(DataModel):
         self.healing_efficiency += healing
         self.update_record({'healing': self.healing_efficiency})
 
+    def set_healing(self, healing:float):
+        self.healing_efficiency = healing
+        self.update_record({'healing': self.healing_efficiency})
+
+    def set_severity(self, severity:float):
+        self.current_severity = severity
+        self.update_record({'severity': self.current_severity})
+
     def get_healing_bonus(self):
         healing_bonus = 0.5 + self.healing_efficiency * 0.01
         return healing_bonus
@@ -269,7 +307,7 @@ class Disease(DataModel):
     def update(self):
         treatment = self.disease_type.treatment_per_cycle * self.get_healing_bonus()
 
-        if self.current_severity >= 100:
+        if self.current_severity >= 100 and self.disease_type.mortality:
             return
 
         self.add_immunity(self.disease_type.immunity_per_cycle * self.get_healing_bonus())
@@ -282,10 +320,14 @@ class Disease(DataModel):
             if self.current_severity <= 0:
                 self.delete_record()
         else:
-            self.add_severity(self.disease_type.severity_per_cycle)
+            if self.current_severity+self.disease_type.severity_per_cycle < 100:
+                self.add_severity(self.disease_type.severity_per_cycle)
+            else:
+                self.set_severity(100)
+
 
     def get_body_element(self):
-        if not self.place:
+        if not self.place or self.place == 'Все тело':
             return None
         else:
             return BodyElement(self.character_id, self.place, data_manager=self.data_manager)
@@ -300,6 +342,16 @@ class Disease(DataModel):
             emoji += ' <:immune:1249787600622063718>'
 
         return f'{self.disease_type.label} ({self.current_severity:.2f}%){emoji}'
+
+    @staticmethod
+    def delete_all_character_diseases(character_id:int):
+        db = DataManager()
+        db.delete('CHARS_DISEASE', f'id = {character_id}')
+
+    @staticmethod
+    def delete_disease(dis_id:int):
+        db = DataManager()
+        db.delete('CHARS_DISEASE', f'dis_id = {dis_id}')
 
 
 
@@ -402,6 +454,8 @@ class ImplantType(DataModel):
         self.capacity_efficiency = self.get('capacity_offset', 0)
         self.weapon_slot = self.get('weapon_slot', 0) if self.get('weapon_slot', None) is not None else 0
 
+        print(self.__dict__)
+
     def __repr__(self):
         return f'ImplantType.{self.implant_type_id}'
 
@@ -415,6 +469,33 @@ class Implant(DataModel):
         self.place = self.get('place', None)
         self.type = ImplantType(self.get('type', None), data_manager=self.data_manager) if self.get('type', None) is not None else None
         self.label = self.get('label', self.type.label if self.type is not None else 'Неизвестный имплант') if self.get('label', None) is not None else self.type.label if self.type is not None else 'Неизвестный имплант'
+
+    @staticmethod
+    def delete_all_character_implants(character_id:int):
+        db = DataManager()
+        db.delete('CHARS_BODY', f'id = {character_id}')
+
+    @staticmethod
+    def delete_implant(implant_id:int):
+        db = DataManager()
+        db.delete('CHARS_BODY', f'imp_id = {implant_id}')
+
+    @classmethod
+    def create_implant(cls, character_id:int, implant_type:str, place:str=None, label:str=None):
+        db = DataManager()
+        imp_id = db.maxValue('CHARS_BODY', 'imp_id') + 1
+        query = {
+            'id': character_id,
+            'imp_id': imp_id,
+            'place': place,
+            'type': implant_type,
+            'label': label
+        }
+
+        db.insert('CHARS_BODY', query)
+
+        return Implant(imp_id, data_manager=db)
+
 
 
 class BodyElement(BodyPart):
@@ -587,6 +668,13 @@ class BodyElement(BodyPart):
         total_offset = self.mortality * (recieved_damage / self.max_health) if self.max_health else self.mortality
         return total_offset
 
+    def replace_with_destroy(self):
+        if self.calculate_health() > 0:
+            return
+
+        Implant.create_implant(self.character_id, 'Destroyed', self.element_id)
+        self.data_manager.delete('CHARS_INJURY', f'id = {self.character_id} AND place = "{self.element_id}"')
+
     def __repr__(self):
         return f'BodyElement.{self.character_id}.{self.element_id}' + f'{f" {self.implant_type.implant_type_id}" if self.implant_type else ""}'
 
@@ -656,7 +744,12 @@ class Body:
 
         total_pain = 0
         for key in injuries:
-            body_part_pain_factor = BodyElement(self.character_id, key, data_manager=self.data_manager).pain_factor
+            body_element = BodyElement(self.character_id, key, data_manager=self.data_manager)
+            body_part_pain_factor = body_element.pain_factor
+            if body_element.calculate_health() <= 0:
+                total_pain += 5 * body_part_pain_factor
+                continue
+
             for injury in injuries[key]:
                 print(injury.calculate_pain(), body_part_pain_factor)
                 total_pain += injury.calculate_pain() * body_part_pain_factor
@@ -743,12 +836,15 @@ class Body:
             return
 
         total_percent = blood_lost_per_minute * minutes
+        print(f'ИТОГОВОЕ КРОВОТЕЧЕНИЕ: {total_percent}')
         bleedout = self.get_bleedout()
         if not bleedout:
+            print('КРОВОТЕЧЕНИЕ', bleedout)
             if total_percent <= 0:
                 pass
             else:
                 Disease.create_character_disease(self.character_id, "BloodLost", severity=total_percent, data_manager=self.data_manager)
+                print('ДОБАВИЛ')
         else:
             bleedout.add_severity(total_percent)
 
@@ -919,6 +1015,8 @@ class Body:
         if pain > 100:
             capacities_effects.append('Болевой шок')
 
+        print(self.character_id, elements_vital, capacities_vital, diseases_vital)
+
         if min(elements_vital, capacities_vital, diseases_vital) > 0 and 'Кома' not in capacities_effects and 'Болевой шок' not in capacities_effects:
             return False, capacities_effects
         else:
@@ -941,14 +1039,25 @@ class Body:
         diseases = [item for sublist in diseases_dict.values() for item in sublist]
         return diseases
 
-    def rest(self):
+    def rest(self, healing_rate:int=0):
         injuries: list[Injury] = self.get_injuries_list()
         diseases: list[Disease] = self.get_diseases_list()
 
         for disease in diseases:
+            if disease.healing_efficiency < healing_rate:
+                disease.set_healing(healing_rate)
             disease.update()
 
         for injury in injuries:
+            place = injury.place
+            if place:
+                if BodyElement(self.character_id, place, data_manager=self.data_manager).calculate_health() <= 0:
+                    continue
+            if injury.is_scar:
+                continue
+
+            if injury.healing_efficiency < healing_rate:
+                injury.set_healing(healing_rate)
             injury.update()
 
 

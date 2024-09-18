@@ -1,26 +1,21 @@
 import pprint
 
-from ArbDatabase import DataManager
+from ArbDatabase import DataManager, DataModel
 from ArbCharacterMemory import CharacterMemory
 from ArbHealth import Body
 
 
-class WorldView:
+class WorldView(DataModel):
     def __init__(self, id:str, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = id
 
-        data = self.fetch_data()
-        self.label = data.get('label', 'Неизвестное мировоззрение')
-        self.chaotic_vector = data.get('chaotic', None)
-        self.kindness_vector = data.get('kindness', None)
-        self.tolerance = data.get('tolerate', 0)
+        DataModel.__init__(self, 'WORLDVIEW', f'id = "{self.id}"', data_manager=self.data_manager)
 
-    def fetch_data(self):
-        if self.data_manager.check('WORLDVIEW', f'id = "{self.id}"'):
-            return self.data_manager.select_dict('WORLDVIEW', filter=f'id = "{self.id}"')[0]
-        else:
-            return {}
+        self.label = self.get('label', 'Неизвестное мировоззрение')
+        self.chaotic_vector = self.get('chaotic', 0)
+        self.kindness_vector = self.get('kindness', 0)
+        self.tolerance = self.get('tolerate', 0)
 
     def worldview_more_kind(self):
         if self.data_manager.check('WORLDVIEW', f'kindness = {self.kindness_vector + 1}'):
@@ -81,13 +76,13 @@ class CharacterMood:
 
         self.mood = 0
         self.mood += self.memories_effect()
-        self.mood += self.stress_effect()
         self.mood += self.pain_effect()
 
     def memories_effect(self):
         return CharacterMemory(self.id, data_manager=self.data_manager).calculate_mood_effect()
 
     def stress_effect(self):
+
         if -40 <= self.mood <= 30:
             return 0
         elif 30 < self.mood <= 55:
@@ -104,7 +99,8 @@ class CharacterMood:
             return 3
 
     def pain_effect(self):
-        pain = Body(self.id, data_manager=self.data_manager).calculate_total_pain()
+        pain = Body(self.id, data_manager=self.data_manager).calculate_pain()
+        print(f'Боль {self.id}', pain)
         return -1.5 * pain
 
     def escape_chance(self):
@@ -118,19 +114,19 @@ class CharacterMood:
             return 100-loyalty
 
 
-class CharacterPsychology:
+class CharacterPsychology(DataModel):
     def __init__(self, id:int, **kwargs):
         self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = id
-        data = self.fetch_data()
-        self.stress = data.get('stress', 0)
-        self.worldview = data.get('worldview', None)
 
-    def fetch_data(self):
-        if self.data_manager.check('CHARS_PSYCHOLOGY', f'id = {self.id}'):
-            return self.data_manager.select_dict('CHARS_PSYCHOLOGY', filter=f'id = {self.id}')[0]
-        else:
-            return {}
+        DataModel.__init__(self, 'CHARS_PSYCHOLOGY', f'id = {self.id}', data_manager=self.data_manager)
+
+        self.stress = self.get('stress', 0)
+        self.worldview = self.get('worldview', None)
+
+        self.stress += self.get_mood_effect()
+        if self.stress < 0:
+            self.stress = 0
 
     def get_worldview(self):
         if self.worldview is None:
@@ -140,10 +136,10 @@ class CharacterPsychology:
 
     def get_loyalty(self):
         current_org = self.data_manager.select_dict('CHARS_INIT', filter=f'id = {self.id}')[0].get('org', None)
-        if self.data_manager.check('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"'):
-            return self.data_manager.select_dict('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"')[0].get('loyalty')
-        else:
-            if current_org:
+        if current_org:
+            if self.data_manager.check('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"'):
+                return self.data_manager.select_dict('CHARS_REPUTATION', filter=f'id = {self.id} AND org = "{current_org}"')[0].get('loyalty')
+            else:
                 query = {
                     'id': self.id,
                     'rep': 0,
@@ -152,5 +148,9 @@ class CharacterPsychology:
                 }
                 self.data_manager.insert('CHARS_REPUTATION', query)
                 return 50
-            else:
-                return 0
+        else:
+            return 0
+
+    def get_mood_effect(self):
+        mood = CharacterMood(self.id, data_manager=self.data_manager).stress_effect()
+        return mood
