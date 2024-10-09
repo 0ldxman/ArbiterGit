@@ -269,7 +269,7 @@ class CharacterMenu(BasicCog):
     @BasicCog.character_required
     async def __character_body(self, ctx, character_id: int=None):
 
-        body = Body(character_id)
+        body = Body(character_id, data_manager=DEFAULT_MANAGER)
         total_text = body.string_capacities()
         total_text += f'\n-# {body.string_pain()}\n-# {body.string_bleeding()}\n-# {body.string_vital_status()}'
 
@@ -277,8 +277,8 @@ class CharacterMenu(BasicCog):
         print(vital_damage)
 
         capacities_embed = HealthEmbed('Самочувствие', total_text, vital_damage,
-                                       footer=Character(character_id).name,
-                                       footer_logo=Character(character_id).picture)
+                                       footer=Character(character_id, data_manager=DEFAULT_MANAGER).name,
+                                       footer_logo=Character(character_id, data_manager=DEFAULT_MANAGER).picture)
 
         hediffs = body.string_hediff()
         hediffs_embed = HealthEmbed('Ранения и заболевания', hediffs if hediffs else f'-# *(Здесь будут отображаться ваши ранения и болезни)*', vital_damage,
