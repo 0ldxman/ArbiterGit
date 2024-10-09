@@ -124,14 +124,16 @@ class DataManager:
 
     def _start_idle_timer(self):
         """Запускаем таймер для автоматического закрытия соединения после простоя"""
-        self.idle_timer = threading.Timer(self.idle_timeout, self.close_connection)
-        self.idle_timer.start()
+        # self.idle_timer = threading.Timer(self.idle_timeout, self.close_connection)
+        # self.idle_timer.start()
+        pass
 
     def _cancel_idle_timer(self):
         """Отменяем таймер простоя, если выполняются запросы"""
-        if self.idle_timer:
-            self.idle_timer.cancel()
-            self.idle_timer = None
+        # if self.idle_timer:
+        #     self.idle_timer.cancel()
+        #     self.idle_timer = None
+        pass
 
     @contextmanager
     def managed_connection(self):
