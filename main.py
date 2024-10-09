@@ -24,10 +24,6 @@ async def on_ready():
 
     print('-- Arbiter ready')
 
-@bot.slash_command(name='test_slash_command', description='Описание команды')
-async def test(ctx):
-     await ctx.respond('Успешный тест!')
-
 # @bot.slash_command(name='option_test')
 # async def __test(
 #         ctx,

@@ -1,6 +1,6 @@
 import datetime
 
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataManager, DataModel, DataDict, DEFAULT_MANAGER, EID, DataObject
 from ArbHealth import Body
 from ArbRoll import Roll
 from ArbSkills import SkillInit
@@ -60,8 +60,8 @@ class CharacterProgress(DataModel):
         if self.skills_exp < exp:
             exp = self.skills_exp
 
-        skill.upgrade_skill(exp)
-        self.update_progress_data(exp=-exp)
+        total_cost = skill.upgrade_skill(exp)
+        self.update_progress_data(exp=-total_cost)
         return ResponsePool(Response(True, f'*Вы потратили **{exp} единиц опыта** для прокачки навыка "{skill.label}".\n-# Текущий уровень навыка: {skill.lvl}\n-# Текущий опыт навыка: {skill.exp}*'))
 
     def spend_skill_points(self, skill_id: str, skill_points:int):
@@ -107,31 +107,158 @@ class CharacterProgress(DataModel):
         return ResponsePool(Response(True, f'*Вы потратили **{mastery_points} очков владения** для прокачки навыка "{skill.label}".\n-# Текущее мастерство навыка: {skill.mastery}*'))
 
 
-class Character(DataModel):
+class Character(DataObject):
     def __init__(self, id:int, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__('CHARS_INIT', f'id = {self.id}', data_manager=self.data_manager)
 
-        self.custom_id = self.get('custom_id', None)
-        self.owner = self.get('owner', None)
+        super(Character, self).__init__('CHARS_INIT', EID(id=self.id), kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.name = self.get('name', 'Неизвестный')
-        self.callsign = self.get('callsign', '')
-        self.age = self.get('age', 30)
-        self.race = Race(self.get('race', 'Human'))
-        self.sex = self.get('sex', 'Неизвестный пол')
+        self._custom_id = self.field('custom_id', None)
+        self._owner_id = self.field('owner', None)
+        self._name = self.field('name', 'Неизвестный')
+        self._callsign = self.field('callsign', '')
+        self._age = self.field('age', 30)
+        self._race = self.field('race', 'Human')
+        self._sex = self.field('sex', 'Неизвестный пол')
+        self._org = self.field('org', None)
+        self._org_lvl = self.field('org_lvl', 'Civilian')
+        self._frac = self.field('frac', None)
+        self._frac_lvl = self.field('frac_lvl', 0)
+        self._picture = self.field('avatar', None)
+        self._update = self.field('updated', None)
+        self._server = self.field('server', None)
+        self._money = self.field('money', 0)
 
-        self.org = self.get('org', None)
-        self.org_lvl = self.get('org_lvl', 0)
+    @property
+    def custom_id(self) -> str:
+        return self._custom_id.load(self.data_manager)
 
-        self.frac = self.get('frac', None)
-        self.frac_lvl = self.get('frac_lvl', 0)
+    @custom_id.setter
+    def custom_id(self, value: str):
+        self._custom_id.save(self.data_manager, value)
 
-        self.picture = self.get('avatar', '') if self.get('avatar') else ''
-        self.update = self.get('updated', None)
-        self.server = self.get('server', None)
-        self.money = self.get('money', None) if self.get('money') else 0
+    @property
+    def owner(self):
+        return self._owner_id.load(self.data_manager)
+
+    @owner.setter
+    def owner(self, value: int):
+        self._owner_id.save(self.data_manager, value)
+
+    @property
+    def name(self):
+        return self._name.load(self.data_manager)
+
+    @name.setter
+    def name(self, value: str):
+        self._name.save(self.data_manager, value)
+
+    @property
+    def callsign(self):
+        return self._callsign.load(self.data_manager)
+
+    @callsign.setter
+    def callsign(self, value: str):
+        self._callsign.save(self.data_manager, value)
+
+    @property
+    def age(self):
+        return self._age.load(self.data_manager)
+
+    @age.setter
+    def age(self, value: int):
+        self._age.save(self.data_manager, value)
+
+    @property
+    def race(self):
+        race = self._race.load(self.data_manager)
+        if race:
+            return Race(race, data_manager=self.data_manager)
+        else:
+            return Race('Human', data_manager=self.data_manager)
+
+    @race.setter
+    def race(self, value: str | Race):
+        if isinstance(value, Race):
+            value = value.race_id
+
+        self._race.save(self.data_manager, value)
+
+    @property
+    def sex(self):
+        return self._sex.load(self.data_manager)
+
+    @sex.setter
+    def sex(self, value: str):
+        self._sex.save(self.data_manager, value)
+
+    @property
+    def org(self):
+        return self._org.load(self.data_manager)
+
+    @org.setter
+    def org(self, value: str):
+        self._org.save(self.data_manager, value)
+
+    @property
+    def org_lvl(self):
+        return self._org_lvl.load(self.data_manager)
+
+    @org_lvl.setter
+    def org_lvl(self, value: str):
+        self._org_lvl.save(self.data_manager, value)
+
+    @property
+    def frac(self):
+        return self._frac.load(self.data_manager)
+
+    @frac.setter
+    def frac(self, value: str):
+        self._frac.save(self.data_manager, value)
+
+    @property
+    def frac_lvl(self):
+        return self._frac_lvl.load(self.data_manager)
+
+    @frac_lvl.setter
+    def frac_lvl(self, value: int):
+        self._frac_lvl.save(self.data_manager, value)
+
+    @property
+    def picture(self):
+        return self._picture.load(self.data_manager)
+
+    @picture.setter
+    def picture(self, value: str):
+        self._picture.save(self.data_manager, value)
+
+    @property
+    def update(self):
+        return self._update.load(self.data_manager)
+
+    @update.setter
+    def update(self, value: str | datetime.datetime):
+        if isinstance(value, datetime.datetime):
+            value = value.strftime('%Y-%m-%d')
+        self._update.save(self.data_manager, value)
+
+    @property
+    def server(self):
+        return self._server.load(self.data_manager)
+
+    @server.setter
+    def server(self, value: int):
+        self._server.save(value, self.data_manager)
+
+    @property
+    def money(self):
+        return self._money.load(self.data_manager)
+
+    @money.setter
+    def money(self, value: int):
+        if value < 0:
+            value = 0
+        self._money.save(value, self.data_manager)
 
     def set_location_on_spawn(self):
         from ArbOrgs import Organization
@@ -146,7 +273,6 @@ class Character(DataModel):
 
     def set_owner(self, owner_id:int):
         self.owner = owner_id
-        self.update_record({'owner': owner_id})
 
     def set_server(self, server_id:int):
         self.server = server_id
@@ -172,33 +298,26 @@ class Character(DataModel):
         self.age = age
         self.data_manager.update('CHARS_INIT', {"age": self.age}, f'id = {self.id}')
 
-    def set_race(self, race: str):
-        self.race = Race(race, data_manager=self.data_manager)
-        self.data_manager.update('CHARS_INIT', {"race": race}, f'id = {self.id}')
+    def set_race(self, race: str | Race):
+        self.race = race
 
     def set_org(self, org: str):
         self.org = org
-        self.data_manager.update('CHARS_INIT', {"org": self.org}, f'id = {self.id}')
 
     def set_org_level(self, rank: str):
         self.org_lvl = rank
-        self.data_manager.update('CHARS_INIT', {"org_lvl": self.org_lvl}, f'id = {self.id}')
 
     def set_frac(self, faction):
         self.frac = faction
-        self.data_manager.update('CHARS_INIT', {"frac": self.frac}, f'id = {self.id}')
 
     def set_frac_level(self, rank: str):
         self.frac_lvl = rank
-        self.data_manager.update('CHARS_INIT', {"frac_lvl": self.frac_lvl}, f'id = {self.id}')
 
     def set_picture(self, picture: str):
         self.picture = picture
-        self.data_manager.update('CHARS_INIT', {"avatar": self.picture}, f'id = {self.id}')
 
     def set_last_update_date(self, date:str):
         self.update = date
-        self.update_record({'updated': self.update})
 
     def add_adventure_points(self, adp: int):
         current_adp = self.data_manager.select_dict('CHARS_LOC', filter=f'id = {self.id}')[0].get('move_points', 0)
@@ -241,7 +360,7 @@ class Character(DataModel):
         healing_rate = CharacterLocation(self.id, data_manager=self.data_manager).get_healing_rate() if CharacterLocation(self.id, data_manager=self.data_manager).entered_location else 0
         print('ЭФФЕКТИВНОСТЬ ЛЕЧЕНИЯ ЛОКАЦИИ', healing_rate)
         Body(self.id, data_manager=self.data_manager).rest(healing_rate)
-        self.add_adventure_points(5)
+        self.add_adventure_points(2)
 
         next_day = self.get_next_day_after_update().strftime('%Y-%m-%d')
         CharacterMemory(self.id, data_manager=self.data_manager).update_memories(next_day)
@@ -267,20 +386,15 @@ class Character(DataModel):
             self.skip_cycle()
 
     def text_relations(self):
-        from ArbCharacterMemory import Relations
-        relations = Relations(self.id, data_manager=self.data_manager).fetch_relations()
+        from ArbCharacterMemory import Relations, CharacterRelations
+        relations = CharacterRelations(self.id, data_manager=self.data_manager).relations
         if not relations:
             return []
 
         total_text = []
         for character_id in relations:
             rel = relations.get(character_id)
-            total_rel = rel.get_total_relations()
-            text = f'- {rel.relation_type.label if not rel.family_type else rel.family_type.label} **{Character(character_id).name}**\n' \
-                   f'> -# *Доверие: {total_rel.trust:+}*\n' \
-                   f'> -# *Взаимопонимание: {total_rel.sympathy:+}*\n' \
-                   f'> -# *Уважение: {total_rel.respect:+}*\n' \
-                   f'> -# *Влечение: {total_rel.love:+}*'
+            text = rel.__str__()
             total_text.append(text)
 
         return total_text
@@ -299,8 +413,6 @@ class Character(DataModel):
             total_text.append(text)
 
         return total_text
-
-
 
     def text_card(self):
         from ArbOrgs import Organization, Rank
@@ -365,7 +477,8 @@ class Character(DataModel):
         if self.money < cost:
             return False
         else:
-            self.money -= cost
+            new_money = self.money - cost
+            self.money = new_money
             self.data_manager.update('CHARS_INIT', {'money': self.money}, f'id = {self.id}')
             return True
 
@@ -377,7 +490,8 @@ class Character(DataModel):
         :return: None
         """
 
-        self.money += amount
+        new_money = self.money + amount
+        self.money = new_money
         self.data_manager.update('CHARS_INIT', {'money': self.money}, f'id = {self.id}')
 
     def give_money(self, amount: float, character_id:int=None) -> bool:
@@ -401,19 +515,19 @@ class Character(DataModel):
 
     def change_reputation(self, org_id:str, amount:int):
         from ArbOrgs import Organization
-        org = Organization(org_id)
+        org = Organization(org_id, data_manager=self.data_manager)
         org.insert_reputation_if_not_exist(self.id)
         org.change_reputation(self.id, amount)
 
     def change_loyalty(self, org_id:str, amount:int):
         from ArbOrgs import Organization
-        org = Organization(org_id)
+        org = Organization(org_id, data_manager=self.data_manager)
         org.insert_reputation_if_not_exist(self.id)
         org.change_loyalty(self.id, amount)
 
     def spend_reputation(self, org_id:str, amount:int):
         from ArbOrgs import Organization
-        org = Organization(org_id)
+        org = Organization(org_id, data_manager=self.data_manager)
         org.insert_reputation_if_not_exist(self.id)
         current_rep = org.get_character_reputation(self.id)
         if current_rep - amount < -100:
@@ -432,9 +546,14 @@ class Character(DataModel):
         if not group:
             return self.org if self.org else 'Civil'
         else:
-            return Character(group.owner_id).org
+            return Character(group.owner_id, data_manager=self.data_manager).org
 
     def delete_character(self):
+        from ArbItems import Inventory
+
+        inv = Inventory.get_inventory_by_character(self.id, data_manager=self.data_manager)
+        self.data_manager.update('ITEMS', {'inventory': None}, filter=f'inventory = {inv.inventory_id}')
+
         delete_tables = {
             'BATTLE_CHARACTERS': f'character_id = {self.id}',
             'BATTLE_DEAD': f'character_id = {self.id}',
@@ -482,7 +601,7 @@ class Character(DataModel):
 
     @staticmethod
     def check_owner(character_id:int, data_manager: DataManager = None):
-        db = data_manager if data_manager else DataManager()
+        db = data_manager if data_manager else DEFAULT_MANAGER
         char = db.select_dict('CHARS_INIT', filter=f'id = {character_id}')
         if not char:
             return False
@@ -494,7 +613,7 @@ class Character(DataModel):
 
     @staticmethod
     def check_active_user(character_id: int, data_manager: DataManager = None):
-        db = data_manager if data_manager else DataManager()
+        db = data_manager if data_manager else DEFAULT_MANAGER
         char = db.select_dict('PLAYERS', filter=f'character_id = {character_id}')
         if not char:
             return False
@@ -503,7 +622,7 @@ class Character(DataModel):
 
     @staticmethod
     def check_org_exist(character_id: int, data_manager: DataManager = None):
-        db = data_manager if data_manager else DataManager()
+        db = data_manager if data_manager else DEFAULT_MANAGER
         char = db.select_dict('CHARS_INIT', filter=f'id = {character_id}')
         if not char:
             return False
@@ -515,7 +634,7 @@ class Character(DataModel):
 
     @classmethod
     def get_unused_characters(cls, data_manager: DataManager = None):
-        db = data_manager if data_manager else DataManager()
+        db = data_manager if data_manager else DEFAULT_MANAGER
         all_characters = [i.get("id") for i in db.select_dict('CHARS_INIT')]
         unused_characters = []
 
@@ -534,7 +653,7 @@ class Character(DataModel):
 
     @classmethod
     def delete_unused_characters(cls, data_manager: DataManager = None):
-        db = data_manager if data_manager else DataManager()
+        db = data_manager if data_manager else DEFAULT_MANAGER
         unused_characters = cls.get_unused_characters(db)
         for character_id in unused_characters:
             Character(character_id, data_manager=db).delete_character()

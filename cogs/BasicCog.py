@@ -1,4 +1,4 @@
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataManager, DataModel, DataDict, DEFAULT_MANAGER
 import discord
 from discord.ext import commands
 from ArbUtils.ArbDataParser import get_owners_character
@@ -8,7 +8,7 @@ from functools import wraps
 
 class BasicCog(commands.Cog):
     def __init__(self, bot):
-        self.bot = bot
+        self.bot: discord.Bot = bot
         print(f'...Module {self.__class__.__name__} is ready')
 
     @staticmethod
@@ -30,19 +30,24 @@ class BasicCog(commands.Cog):
         return self.has_permissions(ctx, 'manage_roles')
 
     def is_admin_or_moderator(self, ctx):
-        return self.has_permissions(ctx, 'administrator', 'manage_guild', 'ban_members')
+        if self.has_permissions(ctx, 'administrator'):
+            return True
+        if self.has_permissions(ctx,'manage_guild'):
+            return True
+        if self.has_permissions(ctx, 'ban_members'):
+            return True
 
     def get_player_current_character(self, ctx):
         player_id = ctx.author.id
-        info = DataDict('PLAYERS', f'id = {player_id}').get('character_id', None)
+        info = DataDict('PLAYERS', f'id = {player_id}', data_manager=DEFAULT_MANAGER).get('character_id', None)
         return info
 
     def in_battle_check(self, character_id:int):
-        db = DataDict('BATTLE_CHARACTERS', f'character_id = {character_id}').get('battle_id', None)
+        db = DataDict('BATTLE_CHARACTERS', f'character_id = {character_id}', data_manager=DEFAULT_MANAGER).get('battle_id', None)
         return db
 
     def is_coordinator(self, character_id:int):
-        db = DataDict('BATTLE_TEAMS', f'coordinator = {character_id}').get('team_id', None)
+        db = DataDict('BATTLE_TEAMS', f'coordinator = {character_id}', data_manager=DEFAULT_MANAGER).get('team_id', None)
         return db
 
     def is_group_leader(self, character_id:int):
@@ -50,7 +55,7 @@ class BasicCog(commands.Cog):
         group = Group.find_group_by_character_id(character_id)
         if not group:
             return False
-        role = GroupRole(group.get_member_role(character_id))
+        role = GroupRole(group.get_member_role(character_id), data_manager=DEFAULT_MANAGER)
         if role.is_leader:
             return True
         else:
@@ -115,7 +120,7 @@ class BasicCog(commands.Cog):
             character_id = kwargs.get('character_id', None)
 
             if character_id is not None:
-                if not self.is_admin(ctx):
+                if not self.is_admin_or_moderator(ctx):
                     await self.respond_if_not_admin(ctx)
                     return
             else:

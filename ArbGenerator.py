@@ -39,6 +39,7 @@ class RandomMaterial:
 
         db = kwargs.get('data_manager', DataManager())
         min_rarity = db.minValue('MATERIALS', 'rarity', f'type = "{material_type}"')
+        print(material_type, tier, min_rarity)
 
         c_roll = random.randint(min_rarity, 100)
         c_materials = [mat['id'] for mat in db.select_dict('MATERIALS', '*', f'type = "{material_type}" AND rarity <= {c_roll} AND tier <= {tier}')]
@@ -100,9 +101,9 @@ class ItemManager:
         if self.item_class == 'Одежда':
             material_type = self.data_manager.select_dict('CLOTHES', filter=f'id = "{self.item_type}"')[0].get('material_type')
         elif self.item_class == 'Оружие':
-            material_type = 'Металл'
+            material_type = 'Оружейный'
         elif self.item_class == 'Граната':
-            material_type = 'Металл'
+            material_type = 'Оружейный'
         else:
             material_type = None
 
@@ -156,6 +157,7 @@ class ItemManager:
             return data_manager.select_dict('WEAPONS', filter=f'id="{weapon_id}"')[0].get('mag')
         else:
             return 0
+
     @staticmethod
     def get_weapon_possible_ammo_static(weapon_id:str, data_manager:DataManager = DataManager()):
         from ArbWeapons import RangeWeapon
@@ -2077,10 +2079,12 @@ class GenerateGroup:
             for temp, value in templates.items():
                 for _ in range(value):
                     content = TemplateManager(temp, data_manager=self.data_manager).content
-                    if 'setOrg' in content:
-                        pattern = r'(setOrg\s*-\s*)([^\n]+)'
-                        content = re.sub(pattern, fr'\1{self.org_id}', content)
                     char_template = CharacterTemplate.from_text(content, danger=self.danger, data_manager=self.data_manager)
+
+                    if self.org_id:
+                        char_template.basic_info.org = self.org_id
+                        char_template.basic_info.org_lvl = char_template.basic_info.generate_rank(self.org_id, data_manager=self.data_manager)
+
                     total_chars.append(char_template)
 
             return total_chars

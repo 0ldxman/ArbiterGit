@@ -52,7 +52,6 @@ class Clothes(Item, ClothesInit):
 
     def armor_protection(self):
         material_protection = self.material.protection_data() if self.material else {}
-        print(f'ЗАЩИТА МАТЕРИАЛА {self.cloth_id}', material_protection)
 
         if not material_protection:
             return {}  # Вернуть пустой словарь, если нет информации о защите материала
@@ -125,7 +124,7 @@ class CharacterArmor:
 
     def ballistic_simulation(self, target_slot: str, damage: Damage) -> Damage | None:
         slot_armor = self.get_slot_protection(target_slot)
-        print(target_slot, slot_armor)
+        print(target_slot)
 
         if not slot_armor:
             return damage
@@ -135,12 +134,13 @@ class CharacterArmor:
 
 
         sorted_armors = dict(sorted(slot_armor.items(), key=lambda item: item[0][0], reverse=True))
-        print(sorted_armors)
 
         for p in sorted_armors:
+            print(p)
             layer, armor_id = p
             protection = sorted_armors[p].get(protection_type, 0)
-            print(damage.penetration)
+            print('ПРОБИТИЕ: ', damage.penetration)
+            print('ЗАЩИТА: ', protection)
 
             if damage.penetration - protection > 0:
                 damage.reduce_penetration(protection)

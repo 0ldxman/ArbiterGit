@@ -1,53 +1,160 @@
 import pprint
 import random
 
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataObject, EID, DEFAULT_MANAGER
 from dataclasses import dataclass
 
 
-class Rank(DataModel):
+class Rank(DataObject):
     def __init__(self, rank_id:str, **kwargs):
         self.rank_id = rank_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        super().__init__('ORG_RANKS', f'id = "{self.rank_id}"', data_manager=self.data_manager)
+        super(Rank, self).__init__('ORG_RANKS', EID(id=self.rank_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label', 'Неизвестный ранг')
-        self.desc = self.get('desc', 'Нет описания ранга')
-        self.power_rank = self.get('lvl', 0)
-        self.is_leader = self.get('is_leader', False) == 1
-        self.can_invite = self.get('can_invite', False) == 1
-        self.can_promote = self.get('can_promote', False) == 1
-        self.can_group = self.get('can_group', False) == 1
-        self.salary = self.get('salary', 0) if self.get('salary') else 0
+        self._label = self.field('label', 'Неизвестное звание')
+        self._desc = self.field('desc', 'Нет описания звания')
+        self._power_rank = self.field('lvl', 0)
+        self._is_leader = self.field('is_leader', 0)
+        self._can_invite = self.field('can_invite', 0)
+        self._can_promote = self.field('can_promote', 0)
+        self._can_group = self.field('can_group', 0)
+        self._salary = self.field('salary', 0)
+
+    @property
+    def label(self):
+        return self._label.load(self.data_manager)
+
+    @property
+    def description(self):
+        return self._desc.load(self.data_manager)
+
+    @property
+    def desc(self):
+        return self.description
+
+    @property
+    def power_rank(self):
+        return self._power_rank.load(self.data_manager)
+
+    @property
+    def is_leader(self):
+        return self._is_leader.load(self.data_manager) == 1
+
+    @property
+    def can_invite(self):
+        return self._can_invite.load(self.data_manager) == 1
+
+    @property
+    def can_promote(self):
+        return self._can_promote.load(self.data_manager) == 1
+
+    @property
+    def can_group(self):
+        return self._can_group.load(self.data_manager) == 1
+
+    @property
+    def salary(self):
+        return self._salary.load(self.data_manager)
 
 
-class Organization(DataModel):
+class Organization(DataObject):
     def __init__(self, id:str, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = id
+        DataObject.__init__(self, 'ORG_INIT', EID(id=self.id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        DataModel.__init__(self, 'ORG_INIT', f'id = "{self.id}"')
+        self._label = self.field('label', 'Неизвестная организация')
+        self._type = self.field('type', 'Неизвестный тип')
+        self._parent_org = self.field('parent', None)
 
-        self.label = self.get('label', 'Неизвестная организация')
-        self.type = self.get('type', 'Неизвестный тип')
-        self.parent_org = self.get('parent', None)
-        if self.parent_org is not None:
-            self.type = f'{self.type} {self.get_parent().label}'
+        self._money = self.field('money', 0)
+        self._tech_tier = self.field('tech_tier', 1)
+        self._basic_power = self.field('power', 100)
+        self._military = self.field('military', 100)
+        self._economy = self.field('economy', 100)
+        self._mood = self.field('mood', 100)
+        self._picture = self.field('picture', None)
+        self._spawn_point = self.field('spawn_loc', None)
 
-        self.money = self.get('money', 0) if self.get('money') else 0
-        self.tech_tier = self.get('tech_tier', 1)
-        self.basic_power = self.get('power', 100)
-        self.military = self.get('military', 100)
-        self.economy = self.get('economy', 100)
-        self.mood = self.get('mood', 100)
-        self.picture = self.get('picture', None)
-        if not self.picture and self.parent_org:
-            self.picture = self.get_parent().picture
+    @property
+    def news_channel(self):
+        link = self.field('news_channel', None)
+        return link.load(self.data_manager)
 
-        self.spawn_point = self.get('spawn_location', None) if self.get('spawn_location') else None
-        if not self.spawn_point and self.parent_org:
-            self.spawn_point = self.get_parent().spawn_point
+    @news_channel.setter
+    def news_channel(self, new_channel: int):
+        link = self.field('news_channel', None)
+        link.save(self.data_manager, new_channel)
+
+    @property
+    def label(self):
+        return self._label.load(self.data_manager)
+
+    @property
+    def parent_org(self):
+        parent_id = self._parent_org.load(self.data_manager)
+        if parent_id:
+            return Organization(parent_id, data_manager=self.data_manager)
+        else:
+            return None
+
+    @property
+    def parent_org_id(self):
+        parent_id = self._parent_org.load(self.data_manager)
+        return parent_id
+
+    @property
+    def type(self):
+        type = self._type.load(self.data_manager)
+        parent_org = self.parent_org
+        if parent_org:
+            return f'{type} {parent_org.label}'
+        return type
+
+    @property
+    def money(self):
+        return self._money.load(self.data_manager)
+
+    @money.setter
+    def money(self, value: int):
+        if value < 0:
+            value = 0
+        self._money.save(value, self.data_manager)
+
+    @property
+    def tech_tier(self):
+        return self._tech_tier.load(self.data_manager)
+
+    @property
+    def basic_power(self):
+        return self._basic_power.load(self.data_manager)
+
+    @property
+    def military(self):
+        return self._military.load(self.data_manager)
+
+    @property
+    def economy(self):
+        return self._economy.load(self.data_manager)
+
+    @property
+    def mood(self):
+        return self._mood.load(self.data_manager)
+
+    @property
+    def picture(self):
+        pic = self._picture.load(self.data_manager)
+        if not pic and self.parent_org:
+            pic = self.parent_org.picture
+
+        return pic
+
+    @property
+    def spawn_point(self):
+        spawn_loc = self._spawn_point.load(self.data_manager)
+        if not spawn_loc and self.parent_org:
+            spawn_loc = self.parent_org.spawn_point
+
+        return spawn_loc
 
     def get_all_characters(self):
         if self.data_manager.check('CHARS_INIT', filter=f'org = "{self.id}"'):
@@ -77,8 +184,8 @@ class Organization(DataModel):
         return sorted_characters
 
     def update_budget(self, amount:float):
-        self.money += amount
-        self.update_record({'money': self.money})
+        new_money = amount + self.money
+        self.money = new_money
 
     def payday(self, part:int=100):
         from ArbCharacters import Character
@@ -89,7 +196,8 @@ class Organization(DataModel):
             rank = Rank(rank_id, data_manager=self.data_manager)
             total_salary = round(rank.salary * (part / 100), 2)
             for character_id in sorted_characters.get(rank_id):
-                if self.money - total_salary < 0:
+                money_check = self.money - total_salary
+                if money_check < 0:
                     break
                 character = Character(character_id, data_manager=self.data_manager)
                 self.update_budget(-1*total_salary)
@@ -113,7 +221,7 @@ class Organization(DataModel):
 
     def get_parent(self) -> 'Organization':
         if self.parent_org:
-            return Organization(self.parent_org, data_manager=self.data_manager)
+            return Organization(self.parent_org_id, data_manager=self.data_manager)
         else:
             return None
 
@@ -130,7 +238,7 @@ class Organization(DataModel):
     def get_inherited_ranks(self):
         ranks = self.fetch_org_ranks()
         if self.parent_org:
-            parent_organization = Organization(self.parent_org, data_manager=self.data_manager)
+            parent_organization = Organization(self.parent_org_id, data_manager=self.data_manager)
             parent_ranks = parent_organization.get_inherited_ranks()
             ranks.extend(parent_ranks)
         return ranks
@@ -380,6 +488,23 @@ class Organization(DataModel):
             text += '*\n\n'
 
         return text
+
+    def set_news_channel(self, channel_id:int):
+        self.news_channel = channel_id
+
+    @staticmethod
+    def get_news_channels():
+        db = DEFAULT_MANAGER
+        news = db.select_dict('ORG_INIT', filter=f'channel is not NULL')
+        return [int(org.get('channel')) for org in news]
+
+    @classmethod
+    def get_org_of_channel(cls, channel_id:int):
+        db = DEFAULT_MANAGER
+        orgs = db.select_dict('ORG_INIT', filter=f'channel = {channel_id}')
+        if not orgs:
+            return None
+        return cls(orgs[0].get('id'), data_manager=db)
 
 
 @dataclass()

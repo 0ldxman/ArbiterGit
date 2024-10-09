@@ -179,6 +179,7 @@ class CharacterMemory:
         respect = 0
         love = 0
         memories = self.group_memory_by_subject()
+        print(memories)
         if subject not in memories:
             return {'trust': trust,
                     'sympathy': sympathy,
@@ -390,3 +391,258 @@ class Relations:
         db = DataManager()
         db.delete('CHARS_RELATIONS', f'id = {character_id} AND subject_id = {familiar_id}')
         db.delete('CHARS_RELATIONS', f'subject_id = {character_id} AND id = {familiar_id}')
+
+
+class CharacterRelations:
+    def __init__(self, character_id:int, **kwargs):
+        self.id = character_id
+        self.data_manager = kwargs.get('data_manager') if kwargs.get('data_manager') else DataManager()
+        self.relations = self.get_all_familiars()
+
+    def fetch_familiars(self) -> dict[int, dict]:
+        data = self.data_manager.select_dict('CHARS_FAMILIARS', filter=f'id = {self.id} OR encounter = {self.id}')
+        familiars = {}
+        for fam in data:
+            if fam.get('id') == self.id:
+                familiars[fam.get('encounter')] = fam
+            elif fam.get('encounter') == self.id:
+                familiars[fam.get('id')] = fam
+
+        return familiars
+
+    def fetch_character_relation(self) -> dict[int, 'RelationData']:
+        data = self.data_manager.select_dict('CHARS_RELATIONS', filter=f'id = {self.id}')
+        encounters = {}
+        for relation in data:
+            encounters[relation.get('subject_id')] = RelationData(relation.get('trust'), relation.get('sympathy'), relation.get('respect'), relation.get('love'))
+        return encounters
+
+    def fetch_relations_to_character(self) -> dict[int, 'RelationData']:
+        data = self.data_manager.select_dict('CHARS_RELATIONS', filter=f'subject_id = {self.id}')
+        encounters = {}
+        for relation in data:
+            encounters[relation.get('id')] = RelationData(relation.get('trust'), relation.get('sympathy'), relation.get('respect'), relation.get('love'))
+        return encounters
+
+    def get_all_familiars(self) -> dict[int, 'Relationship']:
+        character_relation = self.fetch_character_relation()
+        familiar_relations_to_character = self.fetch_relations_to_character()
+        familiars = self.fetch_familiars()
+        all_familiars = {}
+
+        for fam in character_relation:
+            char_rel = character_relation.get(fam, RelationData(0, 0, 0, 0))
+            fam_rel = familiar_relations_to_character.get(fam, RelationData(0, 0, 0, 0))
+            relation_roles = familiars.get(fam, {})
+            relation_type = relation_roles.get('relation_type', None)
+            family_type = relation_roles.get('family_type', None)
+            relations = []
+            if relation_type:
+                relations.append(RelationType(relation_type, data_manager=self.data_manager))
+            if family_type:
+                relations.append(RelationType(family_type, data_manager=self.data_manager))
+
+            if not relations:
+                relations = [RelationType('Unknown', data_manager=self.data_manager)]
+
+            all_familiars[fam] = Relationship(
+                character_id=self.id,
+                encounter_id=fam,
+                relations_types=relations,
+                character_relation=char_rel,
+                encounter_relation=fam_rel,
+            )
+
+        return all_familiars
+
+    def get_relationship(self, encounter_id:int):
+        return self.relations.get(encounter_id, Relationship(self.id,
+                                                             encounter_id,
+                                                             [RelationType('Unknown', data_manager=self.data_manager)],
+                                                             RelationData(0,0,0,0),
+                                                             RelationData(0,0,0,0)))
+
+    def set_relation_type(self, familiar_id:int, relation_type:str):
+        if self.data_manager.check('CHARS_FAMILIARS', f'id = {self.id} AND encounter = {familiar_id}'):
+            self.data_manager.update('CHARS_FAMILIARS', {'relation_type': relation_type}, f'id = {self.id} AND encounter = {familiar_id}')
+        elif self.data_manager.check('CHARS_FAMILIARS', f'id = {familiar_id} AND encounter = {self.id}'):
+            self.data_manager.update('CHARS_FAMILIARS', {'relation_type': relation_type}, f'id = {familiar_id} AND encounter = {self.id}')
+
+    def set_family_type(self, familiar_id:int, relation_type:str):
+        if self.data_manager.check('CHARS_FAMILIARS', f'id = {self.id} AND encounter = {familiar_id}'):
+            self.data_manager.update('CHARS_FAMILIARS', {'family_type': relation_type}, f'id = {self.id} AND encounter = {familiar_id}')
+        elif self.data_manager.check('CHARS_FAMILIARS', f'id = {familiar_id} AND encounter = {self.id}'):
+            self.data_manager.update('CHARS_FAMILIARS', {'family_type': relation_type}, f'id = {familiar_id} AND encounter = {self.id}')
+
+
+    @staticmethod
+    def create_familiar(character_id: int, familiar_id: int, relation_id: str = None, family_id: str = None):
+        db = DataManager()
+
+        if db.check('CHARS_FAMILIARS', f'id = {character_id} AND encounter = {familiar_id}'):
+            return
+        elif db.check('CHARS_FAMILIARS', f'id = {familiar_id} AND encounter = {character_id}'):
+            return
+
+        query = {
+            'id': character_id,
+            'encounter': familiar_id,
+            'relation_type': relation_id,
+            'family_type': family_id
+        }
+        print(query)
+
+        db.insert('CHARS_FAMILIARS', query)
+
+    @staticmethod
+    def update_relations(character_id: int,
+                         familiar_id: int,
+                         trust: int = 0,
+                         sympathy: int = 0,
+                         respect: int = 0,
+                         love: int = 0):
+        db = DataManager()
+        if not db.check('CHARS_RELATIONS', f'id = {character_id} AND subject_id = {familiar_id}'):
+            CharacterRelations.create_relation_values(character_id, familiar_id)
+
+        values = db.select_dict('CHARS_RELATIONS', filter=f'id = {character_id} AND subject_id = {familiar_id}')[0]
+        old_trust = values.get('trust', 0)
+        if not old_trust:
+            old_trust = 0
+        old_sympathy = values.get('sympathy', 0)
+        if not old_sympathy:
+            old_sympathy = 0
+        old_respect = values.get('respect', 0)
+        if not old_respect:
+            old_respect = 0
+        old_love = values.get('love', 0)
+        if not old_love:
+            old_love = 0
+
+        db.update('CHARS_RELATIONS', {'trust': trust+old_trust,
+                                      'sympathy': sympathy+old_sympathy,
+                                      'respect': respect+old_respect,
+                                      'love': love+old_love},
+                  f'id = {character_id} AND subject_id = {familiar_id}')
+
+    @staticmethod
+    def create_relation_values(character_id: int, familiar_id: int):
+        db = DataManager()
+
+        if db.check('CHARS_RELATIONS', f'id = {character_id} AND subject_id = {familiar_id}'):
+            return
+
+        query = {
+            'id': character_id,
+            'subject_id': familiar_id,
+            'trust': 0,
+            'sympathy': 0,
+            'respect': 0,
+            'love': 0
+        }
+
+        db.insert('CHARS_RELATIONS', query)
+
+    @staticmethod
+    def remove_familiar(character_id: int, familiar_id: int):
+        db = DataManager()
+        db.delete('CHARS_FAMILIARS', f'id = {character_id} AND encounter = {familiar_id}')
+        db.delete('CHARS_FAMILIARS', f'encounter = {character_id} AND id = {familiar_id}')
+
+    @staticmethod
+    def clear_relation_values(character_id: int, familiar_id: int):
+        db = DataManager()
+        db.update('CHARS_RELATIONS', {'trust': 0,'sympathy': 0,'respect': 0, 'love': 0}, f'id = {character_id} AND subject_id = {familiar_id}')
+
+
+
+@dataclass()
+class RelationData:
+    trust:int
+    sympathy: int
+    respect: int
+    love: int
+
+
+@dataclass()
+class Relationship:
+    character_id: int
+    encounter_id: int
+    relations_types: list[RelationType]
+    character_relation: RelationData
+    encounter_relation: RelationData
+
+    def __post_init__(self):
+        self.relation_type = self.relations_types[0]
+        self.family_type = self.relations_types[1] if len(self.relations_types) == 2 else None
+
+    def calculate_relation_bonuses(self):
+        trust_bonus = self.relation_type.trust
+        trust_bonus += self.family_type.trust if self.family_type else 0
+        sympathy_bonus = self.relation_type.sympathy
+        sympathy_bonus += self.family_type.sympathy if self.family_type else 0
+        respect_bonus = self.relation_type.respect
+        respect_bonus += self.family_type.respect if self.family_type else 0
+        love_bonus = self.relation_type.love
+        love_bonus += self.family_type.love if self.family_type else 0
+
+        return trust_bonus, sympathy_bonus, respect_bonus, love_bonus
+
+    def fetch_character_memories(self):
+        character_memories = CharacterMemory(self.character_id).relation_effect_to_subject(self.encounter_id)
+        return character_memories
+
+    @property
+    def trust(self):
+        trust = self.character_relation.trust
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+
+        return trust_bonus + trust
+
+    @property
+    def sympathy(self):
+        sympathy = self.character_relation.sympathy
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+
+        return sympathy_bonus + sympathy
+
+    @property
+    def respect(self):
+        respect = self.character_relation.respect
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+
+        return respect_bonus + respect
+
+    @property
+    def love(self):
+        love = self.character_relation.love
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+
+        return love_bonus + love
+
+    def calculate_avg_relation(self):
+        rel = self.character_relation
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+        avg_relation = (rel.trust + trust_bonus + rel.sympathy + sympathy_bonus + rel.respect + respect_bonus + rel.love + love_bonus) / 4
+        return round(avg_relation, 2)
+
+    def __str__(self):
+        from ArbCharacters import Character
+        rel = self.character_relation
+        trust_bonus, sympathy_bonus, respect_bonus, love_bonus = self.calculate_relation_bonuses()
+        memories_effect = self.fetch_character_memories()
+        print(memories_effect)
+        trust_bonus += memories_effect.get('trust', 0)
+        respect_bonus += memories_effect.get('respect', 0)
+        sympathy_bonus += memories_effect.get('sympathy', 0)
+        love_bonus += memories_effect.get('love', 0)
+
+        print(self.encounter_id, self.character_id)
+        print(trust_bonus, respect_bonus, sympathy_bonus, love_bonus)
+
+        text = f'''- {self.relations_types[0].label if len(self.relations_types) == 1 else self.relations_types[1].label} **{Character(self.encounter_id).name}**
+> -# Доверие: {rel.trust + trust_bonus:+}%
+> -# Взаимопонимание: {rel.sympathy + sympathy_bonus:+}%
+> -# Уважение: {rel.respect + respect_bonus:+}%
+> -# Влечение: {rel.love + love_bonus:+}%'''
+        return text

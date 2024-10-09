@@ -1,15 +1,16 @@
 import datetime
+import pprint
 import random
 
 import discord
 from discord.enums import ChannelType
 from discord.ext import commands
 from discord import default_permissions
-from ArbDatabase import DataManager
+from ArbDatabase import DEFAULT_MANAGER, DataManager
 from ArbUIUX import ArbEmbed, HealthEmbed, Paginator, SuccessEmbed, ErrorEmbed, InteractiveForm, FormStep, Selection, SelectingForm
 from ArbResponse import Response, ResponsePool, Notification
 
-from .BasicCog import BasicCog
+from cogs.BasicCog import BasicCog
 
 from ArbUtils.ArbTimedate import TimeManager
 from ArbUtils.ArbDataParser import ListChunker
@@ -26,14 +27,16 @@ from ArbAutocomplete import AAC
 
 
 class AdminTools(BasicCog):
+    cfg_server = discord.SlashCommandGroup('сервер', 'Команды настройки сервера')
     cfg = discord.SlashCommandGroup('настроить', 'Команды настройки сервера')
-    cfg_battle = cfg.create_subgroup('бой', 'Команды настройки боя')
+    cfg_battle = cfg.create_subgroup('бой', 'Команды боя')
     cfg_character = cfg.create_subgroup('персонаж', 'Команды настройки персонажа')
     register = discord.SlashCommandGroup('проверка-анкет', 'Административные команды редактирования анкеты')
     mng = discord.SlashCommandGroup('управление', 'Команды управления')
-    mng_battle = mng.create_subgroup('бой', 'Команлы управления боем')
+    mng_battle = mng.create_subgroup('бой', 'Команды боя')
     mng_dialogue = mng.create_subgroup('диалоги')
     mng_gen = mng.create_subgroup('генерация', 'Команды генерации')
+    mng_loc = mng.create_subgroup('локации', 'Команды локаций')
     # tools = discord.SlashCommandGroup('инструменты', 'Разные инструменты администрирования')
     # tools_dmg = tools.create_subgroup('урон', 'Команды нанесения урона')
     # tools_inj = tools.create_subgroup('ранения', 'Команды ранений')
@@ -44,7 +47,7 @@ class AdminTools(BasicCog):
     # cfg_campaigns = cfg.create_subgroup('кампании', 'Команды кампаний и ивентов')
 
     cur = discord.SlashCommandGroup('курирование', 'Команды курирования')
-    cur_items = cur.create_subgroup('предметы', 'Команда предметов')
+    cur_items = cur.create_subgroup('вещи', 'Команда вещей')
     cur_rels = cur.create_subgroup('отношения', 'Команды отношений')
     cur_damage = cur.create_subgroup('урон', 'Команды урона')
     cur_injury = cur.create_subgroup('ранения', 'Команды ранений')
@@ -58,28 +61,20 @@ class AdminTools(BasicCog):
 
     cfg_location = cfg.create_subgroup('локации', 'Команды настройки локации')
 
-    # @reg.command(name='accept_reg')
-    # def __accept_reg(self, ctx, from_id:int):
-    #     pass
-    #
-    # @reg.command(name='deny_reg')
-    # def __deny_reg(self, ctx, from_id:int):
-    #     pass
-
     async def active_battles(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battles = Battlefield.get_active_battles()
         return [f'{battle} - {Battlefield(battle, data_manager=db).label}' for battle in battles]
 
     async def get_battle_actors(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         battlefield = Battlefield(battle_id, data_manager=db)
         return [f'{actor} - {Character(actor, data_manager=db).name}' for actor in battlefield.fetch_actors()]
 
     async def get_battle_teams(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         battlefield = Battlefield(battle_id, data_manager=db)
@@ -88,14 +83,14 @@ class AdminTools(BasicCog):
         return teams
 
     async def get_battle_layers(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         battlefield = Battlefield(battle_id, data_manager=db)
         return [f'{layer_id} - {layer.label}' for layer_id, layer in battlefield.get_layers().items()]
 
     async def get_battle_objects(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         objects = db.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {battle_id}')
@@ -110,7 +105,7 @@ class AdminTools(BasicCog):
     async def get_battle_traps(ctx: discord.AutocompleteContext):
         from ArbWeapons import TrapInit
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         objects = db.select_dict('BATTLE_TRAPS', filter=f'battle_id = {battle_id}')
@@ -126,7 +121,7 @@ class AdminTools(BasicCog):
     async def get_character_bodyparts(ctx: discord.AutocompleteContext):
         from ArbCore import Player
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         character = ctx.options.get('character')
         if not character:
             character = Player(ctx.interaction.user.id, data_manager=db).current_character
@@ -136,17 +131,17 @@ class AdminTools(BasicCog):
         return [f'{part.part_id} - {part.label}' for part in body_parts]
 
     async def get_range_weapons(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         range_weapons = db.select_dict('WEAPONS', filter=f'class != "ColdSteel"')
         return [f'{weapon.get("id")} - {weapon.get("name")}' for weapon in range_weapons]
 
     async def get_weapons(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         range_weapons = db.select_dict('WEAPONS')
         return [f'{weapon.get("id")} - {weapon.get("name")}' for weapon in range_weapons]
 
     async def get_race_attacks(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         race = ctx.options.get('race')
         race_id = race.split(' ')[0]
 
@@ -154,23 +149,23 @@ class AdminTools(BasicCog):
         return [f'{attack.get("id")} - {attack.get("name")}' for attack in attacks]
 
     async def get_all_characters(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         print([f'{char.get("id")} - {Character(char.get("id"), data_manager=db).name}' for char in db.select_dict('CHARS_INIT', 'id')])
         return [f'{char.get("id")} - {Character(char.get("id"), data_manager=db).name}' for char in db.select_dict('CHARS_INIT', 'id')]
 
     async def get_all_races(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return [f'{race.get("id")} - {Race(race.get("id")).label}' for race in db.select_dict('RACES_INIT')]
 
     async def get_all_dialogues(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         dialogues = [Dialogue(dialogue.get("id")) for dialogue in db.select_dict('DIALOGUE_INIT')]
 
         return [f'{d.dialogue_id} - {d.label} ({ctx.bot.get_channel(d.channel).name})' for d in dialogues]
 
     async def get_all_sounds(ctx: discord.AutocompleteContext):
         from ArbSounds import InBattleSound
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
 
@@ -178,7 +173,7 @@ class AdminTools(BasicCog):
         return [f'{sound.id} - {sound.label} от {Character(sound.actor_id).name if sound.actor_id else "Неизвестно"}' for sound in sounds]
 
     async def get_layer_objects(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         actor_id = int(ctx.options.get('actor').split(' ')[0])
         actor_layer = Actor(actor_id, data_manager=db).layer_id
 
@@ -199,7 +194,7 @@ class AdminTools(BasicCog):
         return total_objects
 
     async def get_battle_layer_objects(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
@@ -218,13 +213,13 @@ class AdminTools(BasicCog):
         return total_objects
 
     async def get_battle_dead(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle = ctx.options.get('battle')
         battle_id = int(battle.split(' ')[0])
         return [f'{char.get("character_id")} - {Character(char.get("character_id")).name}' for char in db.select_dict('BATTLE_DEAD', filter=f'battle_id = {battle_id}')]
 
     async def get_actors_by_actor(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         actor_id = int(ctx.options.get('actor').split(' ')[0])
         battle_id = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
         if not battle_id:
@@ -243,7 +238,7 @@ class AdminTools(BasicCog):
         return total_actors
 
     async def get_layers_by_actor(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         actor_id = int(ctx.options.get('actor').split(' ')[0])
         battle_id = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
         if not battle_id:
@@ -262,7 +257,7 @@ class AdminTools(BasicCog):
         return total_actors
 
     async def get_objects_by_actor(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         actor_id = int(ctx.options.get('actor').split(' ')[0])
         battle_id = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
         if not battle_id:
@@ -285,7 +280,7 @@ class AdminTools(BasicCog):
 
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
-        db = DataManager()
+        db = DEFAULT_MANAGER
         character_injuries = db.select_dict('CHARS_INJURY', filter=f'id = {character_id}')
         injuries = [Injury(inj.get("id_inj"), data_manager=db) for inj in character_injuries]
 
@@ -296,7 +291,7 @@ class AdminTools(BasicCog):
 
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
-        db = DataManager()
+        db = DEFAULT_MANAGER
         character_injuries = db.select_dict('CHARS_DISEASE', filter=f'id = {character_id}')
         injuries = [Disease(inj.get("dis_id"), data_manager=db) for inj in character_injuries]
         print(injuries)
@@ -307,7 +302,7 @@ class AdminTools(BasicCog):
     async def get_character_implants(ctx: discord.AutocompleteContext):
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
-        db = DataManager()
+        db = DEFAULT_MANAGER
         implants = [e for e in Body(character_id, data_manager=db).get_body_elements() if e.implant_type]
         return [f'{e.element_id} - {e.label}' for e in implants]
 
@@ -316,7 +311,7 @@ class AdminTools(BasicCog):
 
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
-        db = DataManager()
+        db = DEFAULT_MANAGER
         data = db.select_dict('CHARS_QUESTS', filter=f'id = {character_id}')
         if not data:
             return []
@@ -329,7 +324,7 @@ class AdminTools(BasicCog):
         quest = ctx.options.get('quest')
         quest_id = quest.split(' ')[0]
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         quest_obj = Quest(quest_id, data_manager=db)
         tasks_dict = quest_obj.get_tasks()
         total_tasks = []
@@ -346,7 +341,7 @@ class AdminTools(BasicCog):
         quest = ctx.options.get('quest')
         quest_id = quest.split(' ')[0]
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         quest_obj = CharacterQuest(character_id, quest_id, data_manager=db)
         tasks_dict = quest_obj.current_tasks()
         total_tasks = []
@@ -356,41 +351,41 @@ class AdminTools(BasicCog):
         return total_tasks
 
     async def get_orgs(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         orgs = db.select_dict('ORG_INIT')
         return [f'{org.get("id")} - {org.get("label")}' for org in orgs]
 
     async def get_orgs_ranks(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         orgs = db.select_dict('ORG_RANKS')
         return [f'{org.get("id")} - {org.get("label")}' for org in orgs]
 
     async def get_org_ranks(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         org_id = ctx.options.get('org').split(' ')[0]
         orgs = db.select_dict('ORG_RANKS', filter=f'org = "{org_id}"')
         return [f'{org.get("id")} - {org.get("label")}' for org in orgs]
 
     async def get_all_quests(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         quests = db.select_dict('QUESTS')
         return [f'{quest.get("id")} - {quest.get("label")} ({quest.get("type")})' for quest in quests]
 
     async def get_all_campaigns(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         quests = db.select_dict('CAMPAIGN_INIT')
         return [f'{quest.get("id")} - {quest.get("label")} ({quest.get("type")})' for quest in quests]
 
     async def get_campaign_quests(ctx: discord.AutocompleteContext):
         from ArbQuests import Quest
-        db = DataManager()
+        db = DEFAULT_MANAGER
         campaign_id = ctx.options.get('campaign').split(' ')[0]
         quests = db.select_dict('CAMPAIGN_QUESTS', filter=f'id = "{campaign_id}"')
         return [f'{quest.get("quest")} - {Quest(quest.get("quest")).label}' for quest in quests]
 
     async def get_campaign_phases(ctx: discord.AutocompleteContext):
         from ArbQuests import Campaign
-        db = DataManager()
+        db = DEFAULT_MANAGER
         campaign_id = ctx.options.get('campaign').split(' ')[0]
 
         campaign_quests = db.select_dict('CAMPAIGN_QUESTS', filter=f'id = "{campaign_id}"')
@@ -406,7 +401,7 @@ class AdminTools(BasicCog):
 
     async def get_quest_rewards(ctx: discord.AutocompleteContext):
         from ArbQuests import Quest
-        db = DataManager()
+        db = DEFAULT_MANAGER
         quest_id = ctx.options.get('quest').split(' ')[0]
         quest = Quest(quest_id, data_manager=db)
         rewards = quest.get_reward()
@@ -427,12 +422,12 @@ class AdminTools(BasicCog):
         await ctx.respond(f'', embed=response)
 
     async def get_all_items(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         items = db.select_dict('ITEMS')
         return [f'{item.get("id")} - {item.get("name")}' for item in items]
 
     async def get_all_itemtypes(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         weapons = db.select_dict('WEAPONS')
         clothes = db.select_dict('CLOTHES')
         items = db.select_dict('ITEMS_INIT')
@@ -447,13 +442,13 @@ class AdminTools(BasicCog):
         return [f'{item.get("id")} - {item.get("name")}' for item in total_items]
 
     async def qualities(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return [quality.get("name") for quality in db.select_dict('QUALITY_INIT')]
 
     async def item_available_materials(ctx: discord.AutocompleteContext):
         from ArbGenerator import ItemManager
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         item_id = ctx.options.get('item_type').split(' ')[0]
 
@@ -463,30 +458,30 @@ class AdminTools(BasicCog):
         return [material.get('name') for material in available_materials]
 
     async def get_memories_types(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return [f'{memory_type.get("id")} - {memory_type.get("label")}' for memory_type in db.select_dict('EVENT_INIT')]
 
     async def get_character_memories(ctx: discord.AutocompleteContext):
         from ArbCharacterMemory import CharacterMemoryEvent
-        db = DataManager()
+        db = DEFAULT_MANAGER
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
 
         return [f'{event.get("event_id")} - {CharacterMemoryEvent(event.get("event_id")).label}' for event in db.select_dict('CHARS_MEMORY', filter=f'id = {character_id}')]
 
     async def get_all_relation_roles(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return [f'{role.get("id")} - {role.get("label")}' for role in db.select_dict('RELATION_ROLES')]
 
     async def get_character_relations(ctx: discord.AutocompleteContext):
-        from ArbCharacterMemory import Relations
-        db = DataManager()
+        from ArbCharacterMemory import CharacterRelations
+        db = DEFAULT_MANAGER
 
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
 
-        relations = Relations(character_id, data_manager=db)
-        return [f'{encounter_id} - {relation.relation_type.label if not relation.family_type else relation.relation_type.label} {Character(encounter_id).name}' for encounter_id, relation in relations.fetch_relations().items()]
+        relations = CharacterRelations(character_id, data_manager=db)
+        return [f'{encounter_id} - {relation.relation_type.label if not relation.family_type else relation.relation_type.label} {Character(encounter_id).name}' for encounter_id, relation in relations.relations.items()]
 
     async def get_author_available_extras(ctx: discord.AutocompleteContext):
         from ArbRolePlay import Extra
@@ -496,23 +491,23 @@ class AdminTools(BasicCog):
         return [f'{extra.tag} - {extra.name}' for extra in extras]
 
     async def get_regions(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         regions = db.select_dict('LOC_CLUSTER')
         return [f'{reg.get("id")} - {reg.get("label")}' for reg in regions]
 
     async def get_location_types(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         location_types = db.select_dict('LOC_TYPE')
         return [f'{location_type.get("id")} - {location_type.get("label")}' for location_type in location_types]
 
     async def get_region_locations(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         region_id = ctx.options.get('region').split(' ')[0]
         locations = db.select_dict('LOC_INIT', filter=f'region = "{region_id}"')
         return [f'{location.get("id")} - {location.get("label")}' for location in locations]
 
     async def get_all_locations(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         locations = db.select_dict('LOC_INIT')
         return [f'{location.get("id")} - {location.get("label")}' for location in locations]
 
@@ -525,36 +520,36 @@ class AdminTools(BasicCog):
         return connections
 
     async def get_time_conds(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         time_conds = db.select_dict('DAYTIME_CONDS')
         return [f'{time_cond.get("id")} - {time_cond.get("label")}' for time_cond in time_conds]
 
     async def get_weather_conds(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         weather_conds = db.select_dict('WEATHER_CONDS')
         return [f'{weather_cond.get("id")} - {weather_cond.get("label")}' for weather_cond in weather_conds]
 
     async def get_loc_objects_types(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         objects = db.select_dict('LOC_OBJECTS_INIT')
         return [f'{object.get("id")} - {object.get("label")}' for object in objects]
 
     async def get_loc_objects(ctx: discord.AutocompleteContext):
         from ArbLocations import LocationObjectType
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         loc_id = ctx.options.get('location').split(' ')[0]
         objects = db.select_dict('LOC_OBJECTS', filter=f'id = "{loc_id}"')
         return [f'{object.get("object_id")} - {LocationObjectType(object.get("type")).label}' for object in objects]
 
     async def get_all_skills(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         skills = db.select_dict('SKILL_INIT')
         return [f'{skill.get("id")} - {skill.get("label")}' for skill in skills]
 
     async def get_character_skills(ctx: discord.AutocompleteContext):
         from ArbSkills import SkillInit
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         character = ctx.options.get('character')
         character_id = BasicCog.prepare_id(character)
@@ -564,30 +559,30 @@ class AdminTools(BasicCog):
         return [f'{skill.get("skill_id")} - {SkillInit(skill.get("skill_id")).label}' for skill in skills]
 
     async def get_templates(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         templates = db.select_dict('GEN_TEMPLATES')
         return [f'{template.get("id")} - {template.get("label")}' for template in templates]
 
     async def get_group_templates(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         templates = db.select_dict('GROUP_TEMPLATES')
         return [f'{template.get("id")} - {template.get("label")}' for template in templates]
 
     async def get_all_groups(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         groups = db.select_dict('GROUP_INIT')
         return [f'{group.get("id")} - {group.get("label")}' for group in groups]
 
     async def get_group_roles(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         group_roles = db.select_dict('GROUP_ROLES')
         return [f'{role.get("id")} - {role.get("label")}' for role in group_roles]
 
-    @cfg.command(name='установить-валюту')
+    @cfg_server.command(name='установить-валюту', description="Установить игровую валюту на сервере")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_currency(self, ctx, currency_tag: discord.Option(str)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
 
         query = {'currency': currency_tag}
@@ -595,11 +590,11 @@ class AdminTools(BasicCog):
         db.update('SERVER_SETTINGS', query, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили знак валюты на сервере: ``{currency_tag}``')
 
-    @cfg.command(name='чат-анкет')
+    @cfg_server.command(name='чат-анкет', description="Установить чат, куда будут приходить анкеты игроков")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_regforms_chat(self, ctx, chat: discord.Option(discord.SlashCommandOptionType.channel)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
 
         query = {'registration_chat': chat.id}
@@ -607,11 +602,11 @@ class AdminTools(BasicCog):
         db.update('SERVER_SETTINGS', query, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили чат для получения анкет регистрации: ``{chat}``')
 
-    @cfg.command(name='ограничение-персонажей')
+    @cfg_server.command(name='ограничение-персонажей', description="Установить максимальное кол-во персонажей для всех игроков сервера")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_server_max_characters(self, ctx, value: discord.Option(discord.SlashCommandOptionType.integer, min_value=1)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
 
         query = {'basic_max_characters': value}
@@ -619,13 +614,13 @@ class AdminTools(BasicCog):
         db.update('SERVER_SETTINGS', query, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили базовое максимальное количество персонажей игрока: ``{value}``')
 
-    @cfg.command(name='ограничение-персонажей-игрока')
+    @cfg_server.command(name='ограничение-персонажей-игрока', description="Установить максимальное кол-во персонажей конкретного игрока")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_player_max_characters(self, ctx,
                                           player: discord.Option(discord.SlashCommandOptionType.user),
                                           value: discord.Option(discord.SlashCommandOptionType.integer, min_value=1)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
 
         query = {'max_chars': value}
@@ -633,34 +628,34 @@ class AdminTools(BasicCog):
         db.update('PLAYERS_SERVERS', query, f'server_id = {ctx.guild.id} AND id = {player.id}')
         await self.cfg_response(ctx, f'Вы успешно установили максимальное количество персонажей {player.mention}: ``{value}``')
 
-    @cfg.command(name='чат-рп-запросов')
+    @cfg_server.command(name='чат-рп-запросов', description="Установить чат, куда будут приходить РП-запросы игроков")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_response_chat(self, ctx, chat: discord.Option(discord.SlashCommandOptionType.channel)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
         db.update('SERVER_SETTINGS', {'responses_chat': chat.id}, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили чат для получения запросов: ``{chat}``')
 
-    @cfg.command(name='чат-обновлений')
+    @cfg_server.command(name='чат-обновлений', description="Чат куда будет приходить информация об обновлениях")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_features_chat(self, ctx, chat: discord.Option(discord.SlashCommandOptionType.channel)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
         db.update('SERVER_SETTINGS', {'features_chat': chat.id}, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили чат для получения обновлений: ``{chat}``')
 
-    @cfg.command(name='чат-модерации')
+    @cfg.command(name='чат-модерации', description="Установить чат администрации")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_moderation_chat(self, ctx, chat: discord.Option(discord.SlashCommandOptionType.channel)):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         Server.register_server_if_not_exist(ctx.guild.id, data_manager=db)
         db.update('SERVER_SETTINGS', {'moderation_chat': chat.id}, f'id = {ctx.guild.id}')
         await self.cfg_response(ctx, f'Вы успешно установили модераторский чат: ``{chat}``')
 
-    @register.command(name='текущие-анкеты')
+    @register.command(name='текущие-анкеты', description="Вывести список активных анкет, ожидающих рассмотрения")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __regform_check(self, ctx,
@@ -690,7 +685,7 @@ class AdminTools(BasicCog):
             embed = form.to_embed()
             await ctx.respond('', embed=embed)
 
-    @register.command(name='принять-анкету')
+    @register.command(name='принять-анкету', description="Принять конкретную анкету или все анкеты на сервере")
     @BasicCog.admin_required
     async def __regform_accept(self, ctx,
                                form_id: discord.Option(int, required=False),
@@ -710,10 +705,10 @@ class AdminTools(BasicCog):
             return
 
         if form_id is None:
+            embed = SuccessEmbed('Анкеты приняты', f'-# Все активные анкеты на сервере были приняты')
+            await ctx.respond('', embed=embed)
             for regform in regforms:
                 await regform.send_accept_embed(ctx)
-                embed = SuccessEmbed('Анкеты приняты', f'-# Все активные анкеты на сервере были приняты')
-                await ctx.respond('', embed=embed)
                 regform.accept(money=money, lvl=lvl, skill_points=skill_points, skill_mods_points=skill_mods_points, exp=exp)
                 regform.delete_form()
         else:
@@ -729,7 +724,7 @@ class AdminTools(BasicCog):
             form.accept(money=money, lvl=lvl, skill_points=skill_points, skill_mods_points=skill_mods_points, exp=exp)
             form.delete_form()
 
-    @register.command(name='отклонить-анкету')
+    @register.command(name='отклонить-анкету', description="Отклонить конкретную анкету или все анкеты на сервере")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __regform_deny(self, ctx,
@@ -745,10 +740,11 @@ class AdminTools(BasicCog):
             return
 
         if form_id is None:
+            embed = SuccessEmbed('Анкеты отклонены',
+                                 f'-# Все активные анкеты на сервере были отклонены по причине:\n```{reason}```')
+            await ctx.respond('', embed=embed)
             for regform in regforms:
                 await regform.send_deny_embed(ctx, reason)
-                embed = SuccessEmbed('Анкеты отклонены', f'-# Все активные анкеты на сервере были отклонены по причине:\n```{reason}```')
-                await ctx.respond('', embed=embed)
                 regform.delete_form()
         else:
             form = [regform for regform in regforms if regform.form_id == form_id]
@@ -762,7 +758,7 @@ class AdminTools(BasicCog):
             await form.send_deny_respond(ctx, reason)
             form.delete_form()
 
-    @commands.slash_command(name='рп-запросы')
+    @commands.slash_command(name='рп-запросы', description="Узнать активные РП-запросы от игроков")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __rp_requests(self, ctx):
@@ -774,7 +770,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond('', view=view, embed=embeds[0])
 
-    @commands.slash_command(name='закрыть-запрос')
+    @commands.slash_command(name='закрыть-запрос', description="Закрыть РП-запрос")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __rp_close(self, ctx, request_id: int):
@@ -790,7 +786,7 @@ class AdminTools(BasicCog):
         embed = SuccessEmbed('Запрос закрыт', f'-# Запрос с идентификатором ||{request_id}|| был успешно закрыт!')
         await ctx.respond('', embed=embed)
 
-    @commands.slash_command(name='закрыть-все-запросы')
+    @commands.slash_command(name='закрыть-все-запросы', description="Закрыть все активные РП-запросы")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __close_all_requests(self, ctx):
@@ -802,7 +798,7 @@ class AdminTools(BasicCog):
         embed = SuccessEmbed('Все запросы закрыты', f'-# Все запросы на сервере **{ctx.guild.name}** были успешно закрыты!')
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-бой')
+    @cfg_battle.command(name='изменить-бой', description="Изменить бой")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_battle(self, ctx,
@@ -849,7 +845,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-слой-боя')
+    @cfg_battle.command(name='изменить-слой-боя', description="Изменить настройки слоя выбранного боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_layer(self, ctx,
@@ -874,7 +870,7 @@ class AdminTools(BasicCog):
         embed = ArbEmbed(f'{layer.label}', f'-# > *Тип слоя: **{layer.terrain.label}***\n-# *Высота: **{layer.height}***', footer=f'{battlefield.label}')
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-объект-боя')
+    @cfg_battle.command(name='изменить-объект-боя', description="Изменить настройки объекта боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_object(self, ctx,
@@ -911,7 +907,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-команду')
+    @cfg_battle.command(name='изменить-команду', description="Изменить настройки команды внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_team(self, ctx,
@@ -926,7 +922,7 @@ class AdminTools(BasicCog):
                           dialogue: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_dialogues), required=False),
                           win_points: discord.Option(int, required=False)):
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle_id = int(battle.split(' ')[0])
         battlefield = Battlefield(battle_id, data_manager=db)
 
@@ -965,7 +961,7 @@ class AdminTools(BasicCog):
                          footer=battlefield.label)
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-звук')
+    @cfg_battle.command(name='изменить-звук', description="Изменить настройки звука")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_sound(self, ctx,
@@ -978,7 +974,7 @@ class AdminTools(BasicCog):
                           content: discord.Option(str, required=False)):
         from ArbSounds import InBattleSound
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle_id = int(battle.split(' ')[0])
         battlefield = Battlefield(battle_id, data_manager=db)
         sound_id = int(sound.split(' ')[0])
@@ -1006,8 +1002,7 @@ class AdminTools(BasicCog):
                          f'-# > *Содержание: **{sound.content}***')
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-участника-боя')
-    @BasicCog.exception_handle
+    @cfg_battle.command(name='изменить-участника-боя', description="Изменить настройки участника боя")
     @BasicCog.admin_required
     async def __set_actor(self, ctx,
                           battle: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(active_battles), required=True),
@@ -1021,7 +1016,7 @@ class AdminTools(BasicCog):
         battle_id = int(battle.split(' ')[0])
         actor_id = int(actor.split(' ')[0])
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         actor = Actor(actor_id)
 
         team_id = team.split(' ')[0] if team else actor.team_id
@@ -1045,14 +1040,14 @@ class AdminTools(BasicCog):
         embed = ArbEmbed(f'Участник боя - {Character(actor_id).name} ({actor_id})',
                          f'-# > *Команда: **{BattleTeam(team_id).label} ({team_id})***\n'
                          f'-# > *Слой: **{Layer(battle_id=battle_id, id=layer_id).label} ({layer_id})***\n'
-                         f'-# > *Объект: **{GameObject(object_id).object_type.label} ({object_id})***\n'
+                         f'-# > *Объект: **{GameObject(object_id).object_type.label if object_id else "||Отсутствует||"} ({object_id})***\n'
                          f'-# > *Инициатива: **{actor.initiative}***\n'
                          f'-# > *Статус: **{to_status.get(actor.is_active)}***\n'
                          f'-# > *Высота полёта: **{actor.fly_height} м.***')
         embed.set_author(Character(actor_id).name, icon_url=Character(actor_id).picture)
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-мертвых')
+    @cfg_battle.command(name='изменить-мертвых', description="Изменить настройки мертвого участника боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_dead(self, ctx,
@@ -1066,7 +1061,7 @@ class AdminTools(BasicCog):
 
         battle_id = int(battle.split(' ')[0])
         actor_id = int(actor.split(' ')[0])
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         dead_data = DataModel('BATTLE_DEAD', f'character_id = {actor_id}', data_manager=db)
 
@@ -1092,7 +1087,7 @@ class AdminTools(BasicCog):
         embed.set_author(Character(actor_id).name, icon_url=Character(actor_id).picture)
         await ctx.respond('', embed=embed)
 
-    @cfg_battle.command(name='изменить-ловушку')
+    @cfg_battle.command(name='изменить-ловушку', description="Изменить настройки ловушки боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __set_trap(self, ctx,
@@ -1106,7 +1101,7 @@ class AdminTools(BasicCog):
 
         battle_id = int(battle.split(' ')[0])
         trap_id = int(trap.split(' ')[0])
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         trap_data = DataModel('BATTLE_TRAPS', f'trap_id = {trap_id}')
         layer_id = int(layer.split(' ')[0]) if layer else trap_data.get('layer_id')
@@ -1127,7 +1122,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='создать-ловушку')
+    @cfg_battle.command(name='создать-ловушку', description="Сознать новую ловушку внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __create_trap(self, ctx,
@@ -1157,7 +1152,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='добавить-звук')
+    @cfg_battle.command(name='добавить-звук', description="Создать новый звук внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_sound(self, ctx,
@@ -1183,7 +1178,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-звук')
+    @cfg_battle.command(name='удалить-звук', description="Удалить звук боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_sound(self, ctx,
@@ -1200,7 +1195,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='добавить-команду')
+    @cfg_battle.command(name='добавить-команду', description="Добавить новую команду внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_team(self, ctx,
@@ -1240,7 +1235,7 @@ class AdminTools(BasicCog):
         embed.set_author(ctx.author.display_name, icon_url=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-команду')
+    @cfg_battle.command(name='удалить-команду', description="Удалить одну из команд в бою")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_team(self, ctx,
@@ -1256,7 +1251,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='добавить-слой')
+    @cfg_battle.command(name='добавить-слой', description="Создать новый слой внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_layer(self, ctx,
@@ -1285,7 +1280,7 @@ class AdminTools(BasicCog):
         embed.set_author(ctx.author.display_name, icon_url=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-слой')
+    @cfg_battle.command(name='удалить-слой', description="Удалить слой внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_layer(self, ctx,
@@ -1303,7 +1298,7 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='добавить-объект')
+    @cfg_battle.command(name='добавить-объект', description="Создать новый объект внутри боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_object(self, ctx,
@@ -1335,7 +1330,7 @@ class AdminTools(BasicCog):
         embed.set_author(ctx.author.display_name, icon_url=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-объект')
+    @cfg_battle.command(name='удалить-объект', description="Удалить объект боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_object(self, ctx,
@@ -1353,7 +1348,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-мертвого-участника')
+    @cfg_battle.command(name='удалить-мертвого-участника', description="Удалить мёртвого участника боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_dead(self, ctx,
@@ -1371,7 +1366,7 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-участника-боя')
+    @cfg_battle.command(name='удалить-участника-боя', description="Удалить участника боя (вывести из боя)")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_actor(self, ctx,
@@ -1391,7 +1386,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cfg_battle.command(name='добавить-участника-боя')
+    @cfg_battle.command(name='добавить-участника-боя', description="Добавить нового участиника боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_actor(self, ctx,
@@ -1431,7 +1426,7 @@ class AdminTools(BasicCog):
                              footer_logo=Character(character_id).picture)
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='добавить-группу-в-бой')
+    @cfg_battle.command(name='добавить-группу-в-бой', description="Ввести в бой существующий отряд")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_group(self, ctx,
@@ -1472,7 +1467,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cfg_battle.command(name='новый-бой')
+    @cfg_battle.command(name='новый-бой', description="Создать новый пустой бой")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __create_battle(self, ctx,
@@ -1492,7 +1487,7 @@ class AdminTools(BasicCog):
                               battle_type: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(AAC.db_call('BATTLE_CONDITIONS', 'label')), required=False, default='Столкновение'),
                               battle_type_value: discord.Option(str, required=False, default=None)):
 
-        battle_id = DataManager().maxValue('BATTLE_INIT', 'id') + 1
+        battle_id = DEFAULT_MANAGER.maxValue('BATTLE_INIT', 'id') + 1
         query = {
             'id': battle_id,
             'label': label,
@@ -1507,7 +1502,7 @@ class AdminTools(BasicCog):
             'type_value': battle_type_value
         }
 
-        DataManager().insert('BATTLE_INIT', query)
+        DEFAULT_MANAGER.insert('BATTLE_INIT', query)
 
         embed = SuccessEmbed(f'Создано новое сражение {label} ({battle_id})',
                              f'-# > *Название: **{label}***\n'
@@ -1524,7 +1519,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='удалить-бой')
+    @cfg_battle.command(name='удалить-бой', description="Удалить один из активных боёв")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_battle(self, ctx, battle: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(active_battles), required=True)):
@@ -1539,7 +1534,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_battle.command(name='изменить-параметры-участника')
+    @cfg_battle.command(name='изменить-параметры-участника', description="Изменить настройки участника боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __edit_actor_combat(self, ctx,
@@ -1569,7 +1564,7 @@ class AdminTools(BasicCog):
             'hunted': BasicCog.prepare_id(hunting) if hunting else None,
             'contained': BasicCog.prepare_id(containing) if containing else None
         }
-        DataManager().update('CHARS_COMBAT', query, f'id = {character_id}')
+        DEFAULT_MANAGER.update('CHARS_COMBAT', query, f'id = {character_id}')
         model = DataModel('CHARS_COMBAT', f'id = {character_id}')
 
         embed = SuccessEmbed(f'Изменены параметры участника боя {Character(character_id).name} ({character_id})',
@@ -1584,8 +1579,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_battle.command(name='следующий-ход')
-    @BasicCog.exception_handle
+    @mng_battle.command(name='следующий-ход', description="Закончить текущий ход и начать новый")
     @BasicCog.admin_required
     async def __next_turn(self, ctx,
                           battle: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(active_battles), required=True),
@@ -1606,8 +1600,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embeds[0], view=view)
 
-    @mng_battle.command(name='закончить-раунд')
-    @BasicCog.exception_handle
+    @mng_battle.command(name='закончить-раунд', description="Принудительно закончить текущий раунд")
     @BasicCog.admin_required
     async def __end_round(self, ctx,
                           battle: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(active_battles), required=True)):
@@ -1621,7 +1614,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embeds[0], view=view)
 
-    @mng_battle.command(name='завершить-бой')
+    @mng_battle.command(name='завершить-бой', description="Принудительно завершить бой")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __end_battle(self, ctx,
@@ -1634,7 +1627,7 @@ class AdminTools(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @mng_battle.command(name='действующий-персонаж')
+    @mng_battle.command(name='действующий-персонаж', description="Взять управление над активным персонажем боя")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __current_actor(self, ctx,
@@ -1642,7 +1635,7 @@ class AdminTools(BasicCog):
         from ArbCore import Player
 
         battle_id = BasicCog.prepare_id(battle)
-        current_actor = DataManager().select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {battle_id} AND is_active = 1')
+        current_actor = DEFAULT_MANAGER.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {battle_id} AND is_active = 1')
         if not current_actor:
             await ctx.respond(embed=ErrorEmbed('Нет активного персонажа', '*На текущий момент нет активного персонажа в бою.*'))
             return
@@ -1651,7 +1644,7 @@ class AdminTools(BasicCog):
         Player(ctx.author.id).switch_character(character_id)
         await ctx.respond(embed=SuccessEmbed('Управление', f'*{ctx.author.mention}, вы управляете активным персонажем: **{Character(character_id).name} ({character_id})** в бою **{battle}***'), ephemeral=True)
 
-    @mng_battle.command(name='воскресить-персонажа')
+    @mng_battle.command(name='воскресить-персонажа', description="Воскресить персонажа из мертвых в бою")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __revive_character(self, ctx,
@@ -1663,7 +1656,7 @@ class AdminTools(BasicCog):
         Battlefield.revive_actor(character_id)
         await ctx.respond(embed=SuccessEmbed('Воскрешение', f'***{Character(character_id).name} ({character_id})** воскрес в бою **{battle}***', footer=ctx.author.display_name, footer_logo=ctx.author.avatar))
 
-    @cur_damage.command(name='урон')
+    @cur_damage.command(name='урон', description="Симулировать получение персонажем урона")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __damage(self, ctx,
@@ -1676,15 +1669,15 @@ class AdminTools(BasicCog):
         from ArbBattle import DamageManager
         from ArbDamage import Damage
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         character_id = BasicCog.prepare_id(character)
         dam_type = AAC.extract('DAMAGE_TYPE', 'label', damage_type, 'id')
         bodypart = place.split(' ')[0]
 
         damage_manager = DamageManager(data_manager=db)
 
-        a_damage = Damage(damage, dam_type, penetration, dam_type, source, data_manager=db)
-
+        print(penetration)
+        a_damage = Damage(damage, dam_type, penetration=penetration, blocked_type=dam_type, root=source, data_manager=db)
         damage_manager.process_damage(character_id, [a_damage], bodyelement=bodypart)
 
         embed = ErrorEmbed('Нанесён урон!',
@@ -1695,7 +1688,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_damage.command(name='выстрел')
+    @cur_damage.command(name='выстрел', description="Симулировать выстрел по персонажу")
     @BasicCog.admin_required
     async def __shot(self, ctx,
                      character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters), required=True),
@@ -1706,7 +1699,7 @@ class AdminTools(BasicCog):
         from ArbBattle import DamageManager
         from ArbSkills import SkillInit
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         damage_manager = DamageManager(data_manager=db)
         character_id = BasicCog.prepare_id(character)
         weapon_id = weapon.split(' ')[0]
@@ -1729,7 +1722,7 @@ class AdminTools(BasicCog):
         await Notification.send_all_notifications(ctx)
 
 
-    @cur_damage.command(name='удар')
+    @cur_damage.command(name='удар', description="Симулировать удар оружием по персонажу")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __hit(self, ctx,
@@ -1741,7 +1734,7 @@ class AdminTools(BasicCog):
         from ArbBattle import DamageManager
         from ArbSkills import SkillInit
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         damage_manager = DamageManager(data_manager=db)
         character_id = BasicCog.prepare_id(character)
         weapon_id = weapon.split(' ')[0]
@@ -1763,7 +1756,7 @@ class AdminTools(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cur_damage.command(name='боевой-приём')
+    @cur_damage.command(name='боевой-приём', description="Симулировать применение приёма на персонаже")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __race_attack(self, ctx,
@@ -1775,7 +1768,7 @@ class AdminTools(BasicCog):
         from ArbWeapons import RaceAttack
         from ArbBattle import DamageManager
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         damage_manager = DamageManager(data_manager=db)
         character_id = BasicCog.prepare_id(character)
         attack_id = attack.split(' ')[0]
@@ -1797,7 +1790,7 @@ class AdminTools(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cur_injury.command(name='удалить-все-ранения')
+    @cur_injury.command(name='удалить-все-ранения', description="Удалить все ранения персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_all_injuries(self, ctx,
@@ -1813,7 +1806,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_illness.command(name='удалить-все-болезни')
+    @cur_illness.command(name='удалить-все-болезни', description="Удалить все болезни персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_all_diseases(self, ctx,
@@ -1829,7 +1822,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_implant.command(name='удалить-все-импланты')
+    @cur_implant.command(name='удалить-все-импланты', description="Удалить все импланты персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_all_injuries(self, ctx,
@@ -1847,7 +1840,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cur_injury.command(name='удалить-ранение')
+    @cur_injury.command(name='удалить-ранение', description="Удалить конкретное ранение персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_injury(self, ctx,
@@ -1867,7 +1860,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cur_illness.command(name='удалить-болезнь')
+    @cur_illness.command(name='удалить-болезнь', description="Удалить конкретную болезнь персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_disease(self, ctx,
@@ -1886,7 +1879,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_implant.command(name='удалить-имлпант')
+    @cur_implant.command(name='удалить-имлпант', description="Удалить конкретный имплант персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __delete_implant(self, ctx,
@@ -1905,7 +1898,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_injury.command(name='изменить-ранение')
+    @cur_injury.command(name='изменить-ранение', description="Изменить настройки ранения персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __change_injury(self, ctx,
@@ -1925,7 +1918,7 @@ class AdminTools(BasicCog):
         injury_obj.update_record(
             {
                 'place': place if place else injury_obj.place,
-                'injury_type': AAC.extract('INJURY_INIT', 'label', injury_type, 'id') if injury_type else injury_obj.injury_type.injury_type_id,
+                'type': AAC.extract('INJURY_INIT', 'label', injury_type, 'id') if injury_type else injury_obj.injury_type.injury_type_id,
                 'root': root if root else injury_obj.root,
                 'damage': damage if damage else injury_obj.damage,
                 'heal_efficiency': heal_efficiency if heal_efficiency else injury_obj.healing_efficiency,
@@ -1945,7 +1938,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_illness.command(name='изменить-болезнь')
+    @cur_illness.command(name='изменить-болезнь', description="Изменить настройки болезни персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __change_disease(self, ctx,
@@ -1961,8 +1954,8 @@ class AdminTools(BasicCog):
         character_id = BasicCog.prepare_id(character)
         disease_obj = Disease(disease_id)
         disease_obj.update_record(
-            {'place': place if place else disease_obj.place,
-             'disease_type': AAC.extract('DISEASE_INIT', 'label', disease_type, 'id') if disease_type else disease_obj.disease_type.disease_type_id,
+            {'place': place if place else disease_obj.place if disease_obj.place != 'Все тело' else None,
+             'type': AAC.extract('DISEASE_INIT', 'label', disease_type, 'id') if disease_type else disease_obj.disease_type.disease_type_id,
              'severity': severity if severity else disease_obj.current_severity,
              'immunity': immunity if immunity is not None else disease_obj.current_immunity,
              'healing': healing if healing is not None else disease_obj.healing_efficiency})
@@ -1971,7 +1964,7 @@ class AdminTools(BasicCog):
 
         embed = SuccessEmbed(f'Болезнь изменена',
                              f'*{ctx.author.mention} изменил болезнь **{disease}** персонажа **{Character(character_id).name}***\n'
-                             f'-# *Место болезни: **{disease_obj.get_body_element().label}***\n'
+                             f'-# *Место болезни: **{disease_obj.get_body_element().label if disease_obj.place != "Все тело" else "Все тело"}***\n'
                              f'-# *Тип болезни: **{disease_obj.disease_type.label}***\n'
                              f'-# *Прогресс болезни: **{disease_obj.current_severity}%***\n'
                              f'-# *Прогресс иммунитета: **{disease_obj.current_immunity}%***\n'
@@ -1981,7 +1974,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_implant.command(name='изменить-имлпант')
+    @cur_implant.command(name='изменить-имлпант', description="Изменить настройки импланта персонажа")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __change_implant(self, ctx,
@@ -2008,7 +2001,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_injury.command(name='добавить-ранение')
+    @cur_injury.command(name='добавить-ранение', description="Добавить персонажу новое ранение")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_injury(self, ctx: discord.ApplicationContext,
@@ -2046,7 +2039,7 @@ class AdminTools(BasicCog):
                              f'-# *Является ли шрамом: **{new_injury.is_scar}***')
         await ctx.respond(embed=embed)
 
-    @cur_illness.command(name='добавить-болезнь')
+    @cur_illness.command(name='добавить-болезнь', description="Добавить персонажу новую болезнь")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_disease(self, ctx: discord.ApplicationContext,
@@ -2085,7 +2078,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_implant.command(name='добавить-имплант')
+    @cur_implant.command(name='добавить-имплант', description="Добавить персонажу новый имплант")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __add_implant(self, ctx: discord.ApplicationContext,
@@ -2111,7 +2104,7 @@ class AdminTools(BasicCog):
 
 
 
-    @mng_dialogue.command(name='начать-диалог')
+    @mng_dialogue.command(name='начать-диалог', description="Запустить диалог в выбраном чате или текущем")
     @BasicCog.exception_handle
     @BasicCog.admin_required
     async def __create_dialogue(self, ctx: discord.ApplicationContext,
@@ -2132,7 +2125,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_dialogue.command(name='закончить-диалог')
+    @mng_dialogue.command(name='закончить-диалог', description="Завершить диалог и проанализировать его")
     @BasicCog.admin_required
     async def __close_dialogue(self, ctx: discord.ApplicationContext, dialogue: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_dialogues), required=True)):
         from ArbDialogues import Dialogue
@@ -2149,7 +2142,7 @@ class AdminTools(BasicCog):
 
         await dialogue_obj.delete_dialogue()
 
-    @plan_quests.command(name='выполнить-задачу')
+    @plan_quests.command(name='выполнить-задачу', description="Выполнить задачу текушего задания персонажа")
     @BasicCog.admin_required
     async def __complete_quest_task(self, ctx: discord.ApplicationContext,
                                     character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters), required=True),
@@ -2185,7 +2178,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='создать-задание')
+    @plan_quests.command(name='создать-задание', description="Создать новое задание")
     @BasicCog.admin_required
     async def __create_quest(self, ctx: discord.ApplicationContext,
                              quest_id: discord.Option(str, required=True),
@@ -2207,7 +2200,7 @@ class AdminTools(BasicCog):
         from ArbQuests import Quest
         from ArbUtils.ArbTimedate import TimeManager
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         if db.check('QUESTS', filter=f'id = "{quest_id}"'):
             embed = ErrorEmbed('Неверный ID квеста', f'*Уже существует квест с таким же идентификатором. Придумайте новый уникальный идентификатор*',
                                footer=ctx.author.name,
@@ -2229,7 +2222,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='удалить-задание')
+    @plan_quests.command(name='удалить-задание', description="Удалить одно из заданий")
     @BasicCog.admin_required
     async def __delete_quest(self, ctx: discord.ApplicationContext,
                              quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True)):
@@ -2246,7 +2239,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='добавить-задачу')
+    @plan_quests.command(name='добавить-задачу', description="Добавить новую задачу в задание")
     @BasicCog.admin_required
     async def __add_quest_task(self, ctx: discord.ApplicationContext,
                                quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2268,7 +2261,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='удалить-задачу')
+    @plan_quests.command(name='удалить-задачу', description="Удалить задачу выбранного задания")
     @BasicCog.admin_required
     async def __delete_quest_task(self, ctx: discord.ApplicationContext,
                                  quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2288,7 +2281,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='добавить-награду')
+    @plan_quests.command(name='добавить-награду', description="Добавить награду за выполнение задания")
     @BasicCog.admin_required
     async def __add_quest_reward(self, ctx: discord.ApplicationContext,
                                  quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2308,7 +2301,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='удалить-награду')
+    @plan_quests.command(name='удалить-награду', description="Удалить награду за выполнение задания")
     @BasicCog.admin_required
     async def __delete_quest_reward(self, ctx: discord.ApplicationContext,
                                  quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2328,7 +2321,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='изменить-задание')
+    @plan_quests.command(name='изменить-задание', description="Изменить настройки задания")
     @BasicCog.admin_required
     async def __edit_quest(self, ctx: discord.ApplicationContext,
                            quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2366,7 +2359,7 @@ class AdminTools(BasicCog):
         quest_obj.update_record(query)
 
         if previous_quest:
-            DataManager().update('QUESTS', {'next_act': quest_id}, f'id = "{previous_quest.split(" ")[0]}"')
+            DEFAULT_MANAGER.update('QUESTS', {'next_act': quest_id}, f'id = "{previous_quest.split(" ")[0]}"')
 
         embed = SuccessEmbed('Задание изменено',
                              f'*Задание **{quest}** изменено успешно.*\n\n{Quest(quest_id).describe()}',
@@ -2375,7 +2368,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='назначить-задание')
+    @plan_quests.command(name='назначить-задание', description="Назначить персонажу и его группе задание")
     @BasicCog.admin_required
     async def __assign_quest(self, ctx: discord.ApplicationContext,
                              quest: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_quests), required=True),
@@ -2404,7 +2397,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_quests.command(name='выдать-награду')
+    @plan_quests.command(name='выдать-награду', description="Выдать персонажу и его группе награду")
     @BasicCog.admin_required
     async def __give_reward(self, ctx: discord.ApplicationContext,
                              character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters), required=True),
@@ -2440,7 +2433,7 @@ class AdminTools(BasicCog):
                                 required_lvl: discord.Option(int, required=False, default=None),
                                 required_relation_with: discord.Option(str, required=False, default=None, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
                                 news_channel: discord.Option(discord.SlashCommandOptionType.channel, required=False, default=None),
-                                picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None)):
+                                picture: discord.Option(str, required=False, default=None)):
         from ArbQuests import Campaign
         from ArbUtils.ArbTimedate import TimeManager
 
@@ -2463,7 +2456,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_campaigns.command(name='удалить-кампанию')
+    @plan_campaigns.command(name='удалить-кампанию', description="Удалить активную кампанию")
     @BasicCog.admin_required
     async def __delete_campaign(self, ctx: discord.ApplicationContext,
                                 campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns))):
@@ -2480,7 +2473,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_campaigns.command(name='удалить-задание-кампании')
+    @plan_campaigns.command(name='удалить-задание-кампании', description="Удалить связь между заданием и кампанией")
     @BasicCog.admin_required
     async def __delete_quest_from_campaign(self, ctx: discord.ApplicationContext,
                                 campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2499,7 +2492,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_campaigns.command(name='добавить-задание-кампании')
+    @plan_campaigns.command(name='добавить-задание-кампании', description="Связать задание и кампанию")
     @BasicCog.admin_required
     async def __add_quest_to_campaign(self, ctx: discord.ApplicationContext,
                                       campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2525,7 +2518,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_campaigns.command(name='новость-кампании')
+    @plan_campaigns.command(name='новость-кампании', description="Написать новость в новостной чат кампании")
     @BasicCog.admin_required
     async def __news_in_campaign(self, ctx: discord.ApplicationContext,
                                  campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2557,7 +2550,7 @@ class AdminTools(BasicCog):
 
         await news_channel.send(f'@here', embed=embed)
 
-    @plan_campaigns.command(name='фиксировать-сведения-кампании')
+    @plan_campaigns.command(name='фиксировать-сведения-кампании', description="Зафиксировать новостной чат кампании")
     @BasicCog.admin_required
     async def __fix_campaign_info(self, ctx: discord.ApplicationContext,
                                   campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2575,8 +2568,9 @@ class AdminTools(BasicCog):
         news_channel = ctx.bot.get_channel(campaign_obj.news_channel_id) if not channel else ctx.bot.get_channel(channel.id)
         message = await news_channel.send(embed=embed)
         campaign_obj.fixate_message(message.id)
+        campaign_obj.update_record({'news_channel': channel.id})
 
-    @plan_campaigns.command(name='параметры-фазы-кампании')
+    @plan_campaigns.command(name='параметры-фазы-кампании', description="Задать параметры этапа/фазы кампании")
     @BasicCog.admin_required
     async def __campaign_phase_settings(self, ctx: discord.ApplicationContext,
                                        campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2600,7 +2594,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @plan_campaigns.command(name='сменить-фазу-кампании')
+    @plan_campaigns.command(name='сменить-фазу-кампании', description="Сменить этап/фазу кампании")
     @BasicCog.admin_required
     async def __change_campaign_phase(self, ctx: discord.ApplicationContext,
                                        campaign: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_campaigns)),
@@ -2630,7 +2624,7 @@ class AdminTools(BasicCog):
         campaign_obj.fixate_message(message.id)
 
 
-    @cur_items.command(name='удалить-предмет')
+    @cur_items.command(name='удалить-предмет', description="Удалить предмет")
     @BasicCog.admin_required
     async def __delete_item(self, ctx: discord.ApplicationContext,
                             item: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_items))):
@@ -2648,7 +2642,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_items.command(name='создать-предмет')
+    @cur_items.command(name='создать-предмет', description="Создать новый предмет")
     @BasicCog.admin_required
     async def __create_item(self, ctx: discord.ApplicationContext,
                             item_type:discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_itemtypes)),
@@ -2679,7 +2673,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='создать-воспоминание')
+    @cur_rels.command(name='создать-воспоминание', description="Создать новое воспоминание персонажа")
     @BasicCog.admin_required
     async def __create_memory(self, ctx: discord.ApplicationContext,
                               character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -2710,7 +2704,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='удалить-воспоминание')
+    @cur_rels.command(name='удалить-воспоминание', description="Удалить одно из воспоминаний")
     @BasicCog.admin_required
     async def __delete_memory(self, ctx: discord.ApplicationContext,
                               character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -2729,7 +2723,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='изменить-воспоминание')
+    @cur_rels.command(name='изменить-воспоминание', description="Изменить настройки воспоминания")
     @BasicCog.admin_required
     async def __edit_memory(self, ctx: discord.ApplicationContext,
                             character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -2772,7 +2766,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='знакомство')
+    @cur_rels.command(name='знакомство', description="Познакомить персонажей")
     @BasicCog.admin_required
     async def __add_friendship(self, ctx: discord.ApplicationContext,
                                character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -2783,21 +2777,21 @@ class AdminTools(BasicCog):
                                sympathy: discord.Option(int, required=False, default=0),
                                respect: discord.Option(int, required=False, default=0),
                                love: discord.Option(int, required=False, default=0)):
-        from ArbCharacterMemory import Relations
+        from ArbCharacterMemory import CharacterRelations
 
         character_id = BasicCog.prepare_id(character)
         encounter_id = BasicCog.prepare_id(encounter)
 
-        Relations.create_familiar(character_id,
-                                  encounter_id,
-                                  relation_type.split(' ')[0] if relation_type else None,
-                                  family_type.split(' ')[0] if family_type else None,
-                                  trust=trust,
-                                  sympathy=sympathy,
-                                  respect=respect,
-                                  love=love)
+        if relation_type or family_type:
+            CharacterRelations.create_familiar(character_id,
+                                      encounter_id,
+                                      relation_type.split(' ')[0] if relation_type else None,
+                                      family_type.split(' ')[0] if family_type else None)
 
-        relation = Relations(character_id).get_relation_to_character(encounter_id)
+        CharacterRelations.create_relation_values(character_id, encounter_id)
+        CharacterRelations.update_relations(character_id, encounter_id, trust, sympathy, respect, love)
+
+        relation = CharacterRelations(character_id).relations.get(encounter_id)
 
         embed = SuccessEmbed(f'Знакомство',
                              f'***{Character(character_id).name}** встретил {relation.relation_type.label if not relation.family_type else relation.family_type.label} **{Character(encounter_id).name}***')
@@ -2805,25 +2799,25 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='удалить-знакомство')
+    @cur_rels.command(name='удалить-знакомство', description="Разорвать отношения между персонажами")
     @BasicCog.admin_required
     async def __delete_friendship(self, ctx: discord.ApplicationContext,
                                    character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
                                    encounter: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_character_relations))):
-        from ArbCharacterMemory import Relations
+        from ArbCharacterMemory import CharacterRelations
 
         character_id = BasicCog.prepare_id(character)
         encounter_id = BasicCog.prepare_id(encounter)
 
-        DataManager().delete('CHARS_RELATIONS', f'id = {character_id} AND subject_id = {encounter_id}')
-        DataManager().delete('CHARS_RELATIONS', f'id = {encounter_id} AND subject_id = {character_id}')
+        DEFAULT_MANAGER.delete('CHARS_FAMILIARS', f'id = {character_id} AND subject_id = {encounter_id}')
+        DEFAULT_MANAGER.delete('CHARS_FAMILIARS', f'id = {encounter_id} AND subject_id = {character_id}')
 
         embed = SuccessEmbed(f'Знакомство удалено',
                              f'*{ctx.author.mention} удалил знакомство между **{Character(character_id).name}** и **{Character(encounter_id).name}**')
 
         await ctx.respond(embed=embed)
 
-    @cur_rels.command(name='изменить-отношения')
+    @cur_rels.command(name='изменить-отношение', description="Изменить отношение одного персонажа к другому")
     @BasicCog.admin_required
     async def __edit_relations(self, ctx: discord.ApplicationContext,
                                character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -2836,58 +2830,52 @@ class AdminTools(BasicCog):
                                sympathy: discord.Option(int, required=False, default=0),
                                respect: discord.Option(int, required=False, default=0),
                                love: discord.Option(int, required=False, default=0)):
-        from ArbCharacterMemory import Relations
+        from ArbCharacterMemory import CharacterRelations
 
         character_id = BasicCog.prepare_id(character)
         encounter_id = BasicCog.prepare_id(encounter)
 
-        old_relation = Relations(character_id).get_relation_to_character(encounter_id)
-        print(old_relation)
-        old_avg_relation = old_relation.get_avg_relation()
+        old_relation = CharacterRelations(character_id).get_relationship(encounter_id)
 
-        relation_id = relation_type.split(' ')[0] if relation_type else None
-        family_id = family_type.split(' ')[0] if family_type else None
-        if not relation_id:
-            relation_id = old_relation.relation_type.relation_id if old_relation.relation_type else None
+        CharacterRelations.update_relations(character_id, encounter_id, trust, sympathy, respect, love)
+        char_relation = CharacterRelations(character_id)
 
-        if not family_id:
-            family_id = old_relation.family_type.relation_id if old_relation.family_type else None
+        if relation_type:
+            char_relation.set_relation_type(encounter_id, relation_type.split(' ')[0])
+        if family_type:
+            char_relation.set_family_type(encounter_id, family_type.split(' ')[0])
 
-        query = {
-            'relation_id': relation_id,
-            'family_id': family_id,
-            'trust': old_relation.trust + trust,
-            'sympathy': old_relation.sympathy + sympathy,
-            'respect': old_relation.respect + respect,
-            'love': old_relation.love + love
-        }
+        new_relation = CharacterRelations(character_id).get_relationship(encounter_id)
 
-        Relations(character_id).get_relation_to_character(encounter_id).update(query)
-
-        new_relation = Relations(character_id).get_relation_to_character(encounter_id)
-        new_avg_relation = new_relation.get_avg_relation()
+        old_avg_relation = old_relation.calculate_avg_relation()
+        new_avg_relation = new_relation.calculate_avg_relation()
 
         if old_avg_relation < new_avg_relation:
-            embed = SuccessEmbed('Отношения улучшились',
-                                 f'*{ctx.author.mention} изменил отношения между **{Character(character_id).name}** и **{Character(encounter_id).name}**, '
-                                 f'средний показатель отношений составил **{old_avg_relation}** -> **{new_avg_relation}***')
-            embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
-            await ctx.respond(embed=embed, ephemeral=True)
-
-            Notification.create_notification(f'Отношения с {Character(encounter_id).name}', f'Отношения с {Character(encounter_id).name} улучшились', character_id, 'success')
-            Notification.create_notification(f'Отношения с {Character(character_id).name}',f'Отношения с {Character(character_id).name} улучшились', encounter_id,'success')
-            await Notification.send_all_notifications(ctx)
-
-        elif old_avg_relation > new_avg_relation:
-            embed = ErrorEmbed('Отношения ухудшились',
-                                 f'*{ctx.author.mention} изменил отношения между **{Character(character_id).name}** и **{Character(encounter_id).name}**, '
+            embed = SuccessEmbed('Отношение улучшилось',
+                                 f'*{ctx.author.mention} изменил отношения **{Character(character_id).name}** к **{Character(encounter_id).name}**, '
                                  f'средний показатель отношений составил **{old_avg_relation}** -> **{new_avg_relation}***')
             embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
             await ctx.respond(embed=embed, ephemeral=True)
 
             Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
-                                             f'Отношения с {Character(encounter_id).name} ухудшились', character_id,
+                                             f'{Character(character_id).name} улучшил своё отношение к {Character(encounter_id).name}',
+                                             character_id,
+                                             'success')
+
+            Notification.create_notification(f'Отношения с {Character(character_id).name}',f'Отношения с {Character(character_id).name} улучшились', encounter_id,'success')
+            await Notification.send_all_notifications(ctx)
+
+        elif old_avg_relation > new_avg_relation:
+            embed = ErrorEmbed('Отношения ухудшились',
+                                 f'*{ctx.author.mention} изменил отношение **{Character(character_id).name}** к **{Character(encounter_id).name}**, '
+                                 f'средний показатель отношений составил **{old_avg_relation}** -> **{new_avg_relation}***')
+            embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
+            await ctx.respond(embed=embed, ephemeral=True)
+
+            Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
+                                             f'{Character(character_id).name} ухудшил своё отношение к {Character(encounter_id).name}', character_id,
                                              'danger')
+
             Notification.create_notification(f'Отношения с {Character(character_id).name}',
                                              f'Отношения с {Character(character_id).name} ухудшились', encounter_id,
                                              'danger')
@@ -2895,29 +2883,30 @@ class AdminTools(BasicCog):
 
         else:
             embed = ArbEmbed('Отношения не изменились',
-                                 f'*{ctx.author.mention} изменил отношения между **{Character(character_id).name}** и **{Character(encounter_id).name}**, '
+                                 f'*{ctx.author.mention} изменил отношение **{Character(character_id).name}** к **{Character(encounter_id).name}**, '
                                  f'средний показатель отношений остался **{old_avg_relation}**')
             embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
             await ctx.respond(embed=embed, ephemeral=True)
 
             Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
-                                             f'Отношения с {Character(encounter_id).name} изменились...', character_id,
+                                             f'{Character(character_id).name} изменил своё отношение к {Character(encounter_id).name}',
+                                             character_id,
                                              'info')
             Notification.create_notification(f'Отношения с {Character(character_id).name}',
                                              f'Отношения с {Character(character_id).name} изменились...', encounter_id,
                                              'info')
             await Notification.send_all_notifications(ctx)
 
-    @cur_rp.command(name='создать-статиста')
+    @cur_rp.command(name='создать-статиста', description="Создать статиста для отыгровок")
     @BasicCog.admin_required
     async def __create_extra(self, ctx: discord.ApplicationContext,
                              tag: discord.Option(str, required=True),
                              name: discord.Option(str, required=True, max_length=100, min_length=2),
-                             picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None),
+                             picture: discord.Option(str, required=False, default=None),
                              is_private: discord.Option(bool, required=False, default=False)):
         from ArbRolePlay import Extra
 
-        new_extra = Extra.create_extra(tag, name, picture.url if picture else None, ctx.author.id if is_private else None)
+        new_extra = Extra.create_extra(tag, name, picture if picture else None, ctx.author.id if is_private else None)
 
         embed = ArbEmbed(new_extra.name,
                          f'— Я готов к работе и отыгровкам!',
@@ -2926,7 +2915,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='удалить-статиста')
+    @cur_rp.command(name='удалить-статиста', description="Удалить статиста для отыгровок")
     @BasicCog.admin_required
     async def __delete_extra(self, ctx: discord.ApplicationContext,
                              tag: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_author_available_extras))):
@@ -2940,20 +2929,21 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='фраза-статиста')
+    @cur_rp.command(name='фраза-статиста', description="Произнести фразу от лица статиста")
     @BasicCog.admin_required
     async def __extra_phrase(self, ctx: discord.ApplicationContext,
                              tag: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_author_available_extras)),
-                             phrase: discord.Option(str, required=True, max_length=2000, min_length=1)):
+                             phrase: discord.Option(str, required=True, max_length=2000, min_length=1),
+                             picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False)):
         from ArbRolePlay import Extra
 
         tag = tag.split(' ')[0]
         extra = Extra(tag)
 
-        await extra.say(ctx, phrase)
+        await extra.say(ctx, phrase, picture.url if picture else None)
 
 
-    @cfg_location.command(name='создать-локацию')
+    @cfg_location.command(name='создать-локацию', description="Создать новую локацию")
     @BasicCog.admin_required
     async def __create_location(self, ctx: discord.ApplicationContext,
                                 region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
@@ -2963,7 +2953,7 @@ class AdminTools(BasicCog):
                                 owner: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_orgs)),
                                 movement_cost: discord.Option(int, required=False, min_value=0, default=2),
                                 current_battle: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(active_battles)),
-                                picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None),
+                                picture: discord.Option(str, required=False, default=None),
                                 is_covered: discord.Option(bool, required=False, default=None)):
         from ArbLocations import Location
 
@@ -2973,7 +2963,7 @@ class AdminTools(BasicCog):
         current_battle_id = BasicCog.prepare_id(current_battle) if current_battle else None
 
         new_location = Location.create_location(location_id,
-                                                label, type_id, region_id, owner_id, movement_cost, current_battle_id, picture.url if picture else None, is_covered)
+                                                label, type_id, region_id, owner_id, movement_cost, current_battle_id, picture if picture else None, is_covered)
 
         embed = SuccessEmbed(f'Локация {label} ({location_id}) создана!',
                              f'-# *Регион: **{new_location.cluster.label}***\n'
@@ -2988,7 +2978,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='изменить-локацию')
+    @cfg_location.command(name='изменить-локацию', description="Изменить настройки локации")
     @BasicCog.admin_required
     async def __update_location(self, ctx: discord.ApplicationContext,
                                 location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations)),
@@ -3001,7 +2991,7 @@ class AdminTools(BasicCog):
                                 movement_cost: discord.Option(int, required=False, min_value=0, default=2),
                                 current_battle: discord.Option(str, required=False,
                                                                autocomplete=discord.utils.basic_autocomplete(active_battles)),
-                                picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None),
+                                picture: discord.Option(str, required=False, default=None),
                                 is_covered: discord.Option(bool, required=False, default=None)):
         from ArbLocations import Location
 
@@ -3013,7 +3003,7 @@ class AdminTools(BasicCog):
         owner_id = owner.split(' ')[0] if owner else None
         current_battle_id = BasicCog.prepare_id(current_battle) if current_battle else None
 
-        a_location.location_update(label, type_id, region_id, owner_id, movement_cost, current_battle_id, picture.url if picture else None, is_covered)
+        a_location.location_update(label, type_id, region_id, owner_id, movement_cost, current_battle_id, picture if picture else None, is_covered)
 
         embed = SuccessEmbed(f'Локация {label} ({location_id}) настроена!',
                              f'-# *Регион: **{a_location.cluster.label}***\n'
@@ -3028,7 +3018,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='удалить-локацию')
+    @cfg_location.command(name='удалить-локацию', description="Удалить одну из локаций")
     @BasicCog.admin_required
     async def __delete_location(self, ctx: discord.ApplicationContext,
                                 location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations))):
@@ -3045,7 +3035,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='создать-регион')
+    @cfg_location.command(name='создать-регион', description="Создать новый регион")
     @BasicCog.admin_required
     async def __create_region(self, ctx: discord.ApplicationContext,
                               region_id: discord.Option(str, required=True),
@@ -3054,8 +3044,8 @@ class AdminTools(BasicCog):
                               time: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(get_time_conds)),
                               weather: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(get_weather_conds)),
                               move_description: discord.Option(str, required=False, min_length=10, max_length=1000, default='Вы переместились на локацию'),
-                              picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None),
-                              map: discord.Option(discord.SlashCommandOptionType.attachment, required=False, default=None)):
+                              picture: discord.Option(str, required=False, default=None),
+                              map: discord.Option(str, required=False, default=None)):
         from ArbLocations import Cluster
         from ArbBattle import Weather, DayTime
 
@@ -3065,11 +3055,11 @@ class AdminTools(BasicCog):
         new_cluster = Cluster.create_cluster(region_id,
                                              label,
                                              type,
-                                             picture.url if picture else None,
+                                             picture if picture else None,
                                              weather_id,
                                              time_id,
                                              move_description,
-                                             map.url if map else None)
+                                             map if map else None)
 
         embed = SuccessEmbed(f'Регион {label} ({region_id}) создан!',
                              f'-# *Тип региона: **{new_cluster.type}***\n'
@@ -3083,7 +3073,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='погода-региона')
+    @mng_loc.command(name='погода-региона', description="Установить погоду региона")
     @BasicCog.admin_required
     async def __weather_region(self, ctx: discord.ApplicationContext,
                                region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
@@ -3103,7 +3093,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='время-региона')
+    @mng_loc.command(name='время-региона', description="Зафиксировать/Привязать к реальному (МСК) время региона")
     @BasicCog.admin_required
     async def __time_of_region(self, ctx: discord.ApplicationContext,
                                region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
@@ -3123,7 +3113,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='название-региона')
+    @mng_loc.command(name='название-региона', description="Установить название региона")
     @BasicCog.admin_required
     async def __region_name(self, ctx: discord.ApplicationContext,
                                region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
@@ -3141,7 +3131,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='описание-региона')
+    @mng_loc.command(name='описание-региона')
     @BasicCog.admin_required
     async def __region_description(self, ctx: discord.ApplicationContext,
                                      region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
@@ -3158,16 +3148,16 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='изображение-региона')
+    @mng_loc.command(name='изображение-региона', description="Установить изображение (картинку) региона")
     @BasicCog.admin_required
     async def __region_picture(self, ctx: discord.ApplicationContext,
                                     region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
-                                    new_picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False)):
+                                    new_picture: discord.Option(str, required=False)):
         from ArbLocations import Cluster
 
         region_id = region.split(' ')[0]
         a_cluster = Cluster(region_id)
-        a_cluster.update_record({'picture': new_picture.url if new_picture else None})
+        a_cluster.update_record({'picture': new_picture if new_picture else None})
         a_cluster = Cluster(region_id)
 
         embed = SuccessEmbed(f'Изображение региона {region} изменено!',
@@ -3177,16 +3167,16 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='установить-карту-региона')
+    @mng_loc.command(name='установить-карту-региона', description="Установить карту региона")
     @BasicCog.admin_required
     async def __set_map(self, ctx: discord.ApplicationContext,
                                 region: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_regions)),
-                                new_map: discord.Option(discord.SlashCommandOptionType.attachment, required=False)):
+                                new_map: discord.Option(str, required=False)):
         from ArbLocations import Cluster
 
         region_id = region.split(' ')[0]
         a_cluster = Cluster(region_id)
-        a_cluster.update_record({'map': new_map.url if new_map else None})
+        a_cluster.update_record({'map': new_map if new_map else None})
         a_cluster = Cluster(region_id)
 
         embed = SuccessEmbed(f'Карта региона {region} изменена!',
@@ -3197,7 +3187,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cfg_location.command(name='добавить-объект-локации')
+    @cfg_location.command(name='добавить-объект-локации', description="Добавить объект на локацию")
     @BasicCog.admin_required
     async def __add_object_location(self, ctx: discord.ApplicationContext,
                                     location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations)),
@@ -3219,7 +3209,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='удалить-объект-локации')
+    @cfg_location.command(name='удалить-объект-локации', description="Удалить объект локации")
     @BasicCog.admin_required
     async def __delete_object_location(self, ctx: discord.ApplicationContext,
                                         location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations)),
@@ -3239,7 +3229,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cfg_location.command(name='добавить-путь')
+    @cfg_location.command(name='добавить-путь', description="Добавить путь между локациями")
     @BasicCog.admin_required
     async def __add_path(self, ctx: discord.ApplicationContext,
                          location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations)),
@@ -3264,7 +3254,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cfg_location.command(name='удалить-путь')
+    @cfg_location.command(name='удалить-путь', description="Удалить путь между локациями")
     @BasicCog.admin_required
     async def __delete_path(self, ctx: discord.ApplicationContext,
                              location: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_locations)),
@@ -3282,7 +3272,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='дислокация')
+    @cur_rp.command(name='дислокация', description="Телепортировать персонажа и его группу на локацию")
     @BasicCog.admin_required
     async def __dislocation(self, ctx: discord.ApplicationContext,
                             character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3304,7 +3294,7 @@ class AdminTools(BasicCog):
                              f'***{", ".join(characters_names)}**, {Location(location_id).cluster.move_desc.lower()} **{Location(location_id).label} ({Location(location_id).type.label})***')
         await ctx.respond(embed=embed)
 
-    @cur_skills.command(name='добавить-навык')
+    @cur_skills.command(name='добавить-навык', description="Добавить персонажу новый навык")
     @BasicCog.admin_required
     async def __add_skill(self, ctx: discord.ApplicationContext,
                           character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3334,7 +3324,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_skills.command(name='удалить-навык')
+    @cur_skills.command(name='удалить-навык', description="Удалить навык персонажа")
     @BasicCog.admin_required
     async def __delete_skill(self, ctx: discord.ApplicationContext,
                               character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3352,7 +3342,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_skills.command(name='изменить-навык')
+    @cur_skills.command(name='изменить-навык', description="Изменить прогресс навыка персонажа")
     @BasicCog.admin_required
     async def __change_skill(self, ctx: discord.ApplicationContext,
                           character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3391,7 +3381,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cur_skills.command(name='изменить-прогресс')
+    @cur_skills.command(name='изменить-прогресс', description="Изменить ОН, ОП и опыт персонажа")
     @BasicCog.admin_required
     async def __skills(self, ctx: discord.ApplicationContext,
                        character: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3418,7 +3408,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @mng_gen.command(name='генерация-боя')
+    @mng_gen.command(name='генерация-боя', description="Сгенерирорвать бой")
     @BasicCog.admin_required
     async def __generate_battle(self, ctx:discord.ApplicationContext,
                                 label: discord.Option(str, required=False, default='Безымянное сражение'),
@@ -3472,7 +3462,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='создать-персонажа')
+    @mng_gen.command(name='создать-персонажа', description="Сгенерировать персонажа")
     @BasicCog.admin_required
     async def __generate_unit(self, ctx: discord.ApplicationContext,
                               danger: discord.Option(int, min_value=0, default=random.randint(0, 6), required=False),
@@ -3485,7 +3475,7 @@ class AdminTools(BasicCog):
                               org_id: discord.Option(str, default=None, autocomplete=discord.utils.basic_autocomplete(get_orgs), required=False),
                               org_rank: discord.Option(str, default=None, autocomplete=discord.utils.basic_autocomplete(get_orgs_ranks), required=False),
                               org_lvl: discord.Option(int, default=None, min_value=0, required=False),
-                              picture: discord.Option(discord.SlashCommandOptionType.attachment, default=None, required=False)):
+                              picture: discord.Option(str, default=None, required=False)):
         from ArbGenerator import CharacterTemplate
 
         embed = ArbEmbed('Создание персонажа',
@@ -3493,7 +3483,7 @@ class AdminTools(BasicCog):
 
         message = await ctx.respond(embed=embed)
         time = datetime.datetime.now()
-        new_character = CharacterTemplate(danger, budget, ctx.guild.id, race.split(' ')[0] if race else None, org_id.split(' ')[0] if org_id else None, org_rank.split(' ')[0] if org_rank else None, org_lvl, picture=picture.url if picture else None,
+        new_character = CharacterTemplate(danger, budget, ctx.guild.id, race.split(' ')[0] if race else None, org_id.split(' ')[0] if org_id else None, org_rank.split(' ')[0] if org_rank else None, org_lvl, picture=picture if picture else None,
                                           name=name,age=age,callsign=callsign, gender=gender)
         new_character_id = new_character.insert_data()
         print(datetime.datetime.now() - time)
@@ -3511,7 +3501,7 @@ class AdminTools(BasicCog):
 
         CharacterEquipment(new_character_id).validate_and_fix_equipment()
 
-    @mng_gen.command(name='создать-шаблон')
+    @mng_gen.command(name='создать-шаблон', description="Сохранить шаблон генерации персонажа")
     @BasicCog.admin_required
     async def __generate_template(self, ctx: discord.ApplicationContext,
                                   template_id: discord.Option(str, required=True),
@@ -3528,7 +3518,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='создать-шаблон-группы')
+    @mng_gen.command(name='создать-шаблон-группы', description="Сохранить шаблон генерации группы")
     @BasicCog.admin_required
     async def __generate_template_group(self, ctx: discord.ApplicationContext,
                                          template_id: discord.Option(str, required=True),
@@ -3542,7 +3532,7 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='удалить-шаблон-группы')
+    @mng_gen.command(name='удалить-шаблон-группы', description="Удалить шаблон генерации группы")
     @BasicCog.admin_required
     async def __update_template_group(self, ctx: discord.ApplicationContext,
                                          template: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_group_templates))):
@@ -3556,7 +3546,7 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='изменить-шаблон-группы')
+    @mng_gen.command(name='изменить-шаблон-группы', description="Изменить шаблон генерации группы (шаблоны генерации персонажей и их количество)")
     @BasicCog.admin_required
     async def __update_template_group_label(self, ctx: discord.ApplicationContext,
                                             template: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_group_templates)),
@@ -3574,7 +3564,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @mng_gen.command(name='изменить-шаблон')
+    @mng_gen.command(name='изменить-шаблон', description="Изменить шаблон генерации персонажа")
     @BasicCog.admin_required
     async def __update_template(self, ctx: discord.ApplicationContext,
                                 template: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_templates)),
@@ -3597,7 +3587,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='удалить-шаблон')
+    @mng_gen.command(name='удалить-шаблон', description="Удалить шаблон генерации персонажа")
     @BasicCog.admin_required
     async def __delete_template(self, ctx: discord.ApplicationContext,
                                 template: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(get_templates))):
@@ -3613,12 +3603,25 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng_gen.command(name='сгенерировать-по-шаблону')
+    @mng_gen.command(name='сгенерировать-по-шаблону', description="Сгенерировать персонажа в соответствии с шаблоном (сохраненным или введенным вручную)")
     @BasicCog.admin_required
     async def __list_templates(self, ctx: discord.ApplicationContext,
                                template: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(get_templates)),
                                content: discord.Option(str, required=False),
-                               danger: discord.Option(int, required=False, min_value=0, default=random.randint(0, 6))):
+                               danger: discord.Option(int, required=False, min_value=0, default=random.randint(0, 6)),
+                               name: discord.Option(str, default=None, required=False),
+                               age: discord.Option(int, default=None, required=False),
+                               callsign: discord.Option(str, default=None, required=False),
+                               gender: discord.Option(str, default=None, required=False),
+                               org: discord.Option(str, default=None,
+                                                      autocomplete=discord.utils.basic_autocomplete(get_orgs),
+                                                      required=False),
+                               org_rank: discord.Option(str, default=None,
+                                                        autocomplete=discord.utils.basic_autocomplete(get_orgs_ranks),
+                                                        required=False),
+                               picture: discord.Option(str, default=None,
+                                                       required=False)
+                               ):
         from ArbGenerator import TemplateManager, CharacterTemplate
 
         template_content = TemplateManager(template.split(' ')[0]).content if template else None
@@ -3632,6 +3635,17 @@ class AdminTools(BasicCog):
             return
 
         new_character = CharacterTemplate.from_text(template_content, danger)
+        new_character.basic_info.name = name if name else new_character.basic_info.name
+        new_character.basic_info.age = age if age else new_character.basic_info.age
+        new_character.basic_info.callsign = callsign if callsign else new_character.basic_info.callsign
+        new_character.basic_info.sex = gender if gender else new_character.basic_info.sex
+        new_character.basic_info.org = org.split(' ')[0] if org else new_character.basic_info.org
+        new_character.basic_info.org_lvl = org_rank.split(' ')[0] if org_rank else new_character.basic_info.org_lvl
+        new_character.basic_info.avatar = picture if picture else new_character.basic_info.avatar
+
+        print(new_character.to_text())
+        pprint.pprint(new_character.__dict__)
+
         new_character_id = new_character.insert_data()
 
         character = Character(new_character_id)
@@ -3647,7 +3661,7 @@ class AdminTools(BasicCog):
 
         CharacterEquipment(new_character_id).validate_and_fix_equipment()
 
-    @mng_gen.command(name='сгенерировать-группу')
+    @mng_gen.command(name='сгенерировать-группу', description="Сгенерировать группу персонажей")
     @BasicCog.admin_required
     async def __generate_group(self, ctx: discord.ApplicationContext,
                                label: discord.Option(str, min_length=2, max_length=50, required=False),
@@ -3659,6 +3673,8 @@ class AdminTools(BasicCog):
         from ArbGenerator import GenerateGroup
         from ArbGroups import Group
         from ArbOrgs import Organization
+
+        print(org)
 
         new_group = GenerateGroup(label, BasicCog.prepare_id(owner) if owner else None, org.split(' ')[0] if org else 'Civil', num_of_units, danger, template.split(' ')[0] if template else None)
         new_group_id = new_group.insert_data()
@@ -3673,7 +3689,7 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @cur_rp.command(name='добавить-в-группу')
+    @cur_rp.command(name='добавить-в-группу', description="Добавить персонажа в группу")
     @BasicCog.admin_required
     async def __add_group_member(self, ctx: discord.ApplicationContext,
                                  character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3690,7 +3706,7 @@ class AdminTools(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @cur_rp.command(name='изменить-персонажа')
+    @cur_rp.command(name='изменить-персонажа', description="Изменить основную информацию о персонаже")
     @BasicCog.admin_required
     async def __change_character(self, ctx: discord.ApplicationContext,
                                  character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters)),
@@ -3699,25 +3715,33 @@ class AdminTools(BasicCog):
                                  name: discord.Option(str, required=False, min_length=2, max_length=80),
                                  org: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(get_orgs)),
                                  org_rank: discord.Option(str, required=False, autocomplete=discord.utils.basic_autocomplete(get_orgs_ranks)),
-                                 avatar: discord.Option(discord.SlashCommandOptionType.attachment, required=False),
+                                 avatar: discord.Option(str, required=False),
                                  money: discord.Option(int, required=False)):
 
         character_id = BasicCog.prepare_id(character)
 
         char = Character(character_id)
 
-        char.update_record(
-            {
-                'race': race.split(' ')[0] if race else char.race.race_id,
-                'sex': gender if gender else char.sex,
-                'name': name if name else char.name,
-                'org': org.split(' ')[0] if org else char.org,
-                'org_lvl': org_rank.split(' ')[0] if org_rank else char.org_lvl,
-                'avatar': avatar.url if avatar else char.picture,
-                'money': money if money else char.money
-            }
-        )
-        char = Character(character_id)
+        if race:
+            char.race = race.split(' ')[0]
+
+        if gender:
+            char.sex = gender
+
+        if name:
+            char.name = name
+
+        if org:
+            char.org = org.split(' ')[0]
+
+        if org_rank:
+            char.org_lvl = org_rank.split(' ')[0]
+
+        if avatar:
+            char.picture = avatar
+
+        if money:
+            char.money = money
 
         embed = SuccessEmbed(f'Изменение персонажа',
                              f'{ctx.author.mention} изменил информацию о персонаже **{character}**:\n'
@@ -3727,7 +3751,7 @@ class AdminTools(BasicCog):
                              logo_url=char.picture)
         await ctx.respond(embed=embed)
 
-    @mng.command(name='удалить-персонажа')
+    @mng.command(name='удалить-персонажа', description="Принудительно удалить персонажа")
     @BasicCog.admin_required
     async def __delete_character(self, ctx: discord.ApplicationContext,
                                  character: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_characters))):
@@ -3741,7 +3765,7 @@ class AdminTools(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @mng.command(name='удалить-неактивных-персонажей')
+    @mng.command(name='удалить-неактивных-персонажей', description="Удалить всех персонажей без хозяина и активного пользователя")
     @BasicCog.admin_required
     async def __delete_unused_characters(self, ctx: discord.ApplicationContext):
         total_characters = Character.delete_unused_characters()
@@ -3754,5 +3778,138 @@ class AdminTools(BasicCog):
         await ctx.respond(embed=embed)
 
 
+    @commands.slash_command(name='admin_test')
+    @BasicCog.admin_required
+    async def admin_test(self, ctx: discord.ApplicationContext,
+                           picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False)):
+        await ctx.respond(f'Pong! {ctx.bot.latency}')
+        if picture:
+            pprint.pprint(picture.ephemeral)
+            await ctx.send(picture)
+
+
+    @cur_rp.command(name='пост', description='Создаёт игровой пост')
+    @BasicCog.admin_required
+    async def create_post(self, ctx: discord.ApplicationContext,
+                          title: discord.Option(str, required=False, min_length=2, max_length=180),
+                          color: discord.Option(str, required=False, choices=['Обычный', 'Красный', 'Зеленый'], default='Обычный'),
+                          picture: discord.Option(discord.SlashCommandOptionType.attachment, required=False),
+                          logo: discord.Option(discord.SlashCommandOptionType.attachment, required=False),
+                          author: discord.Option(str, required=False),
+                          footer: discord.Option(str, required=False),
+                          author_logo: discord.Option(discord.SlashCommandOptionType.attachment, required=False),
+                          footer_logo: discord.Option(discord.SlashCommandOptionType.attachment, required=False)):
+
+        response_embed = ArbEmbed('Начато написание поста', '-# Отправьте последующее сообщение. Оно будет преобразовано в пост.\n'
+                                                            '### Настройки:\n'
+                                                            f'Название - {title}\n'
+                                                            f'Цвет - {color}\n'
+                                                            f'Автор - {author}\n'
+                                                            f'Нижний текст - {footer}\n',
+                                  picture=picture.url if picture else None,
+                                  logo_url=logo.url if logo else None,
+                                  footer_logo=footer_logo.url if footer_logo else None)
+        response_embed.set_author(author, icon_url=author_logo)
+
+        response = await ctx.respond(embed=response_embed, ephemeral=True)
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        try:
+            message = await ctx.bot.wait_for('message', check=check)
+
+            if color == 'Обычный':
+                embed = ArbEmbed(title, message.content,
+                                 picture=picture.url if picture else None,
+                                 logo_url=logo.url if logo else None,
+                                 footer_logo=footer_logo.url if footer_logo else None,
+                                 footer=footer)
+                embed.set_author(author, icon_url=author_logo)
+            elif color == 'Красный':
+                embed = ErrorEmbed(title, message.content,
+                                 picture=picture.url if picture else None,
+                                 logo_url=logo.url if logo else None,
+                                 footer_logo=footer_logo.url if footer_logo else None,
+                                 footer=footer)
+                embed.set_author(author, icon_url=author_logo)
+            elif color == 'Зелёный':
+                embed = SuccessEmbed(title, message.content,
+                                 picture=picture.url if picture else None,
+                                 logo_url=logo.url if logo else None,
+                                 footer_logo=footer_logo.url if footer_logo else None,
+                                 footer=footer)
+                embed.set_author(author, icon_url=author_logo)
+            else:
+                embed = ArbEmbed(title, message.content,
+                                 picture=picture.url if picture else None,
+                                 logo_url=logo.url if logo else None,
+                                 footer_logo=footer_logo.url if footer_logo else None,
+                                 footer=footer)
+                embed.set_author(author, icon_url=author_logo)
+            await message.delete()
+            await ctx.send('', embed=embed)
+            await response.delete_original_response()
+
+
+        except Exception as e:
+            embed = ArbEmbed('Произошла ошибка', f'При создании поста произошла ошибка: `{e}`')
+            await ctx.respond(embed=embed, ephemeral=True)
+
+    @cur.command(name='кратко')
+    @BasicCog.admin_required
+    async def __summary(self, ctx: discord.ApplicationContext,
+                        channel: discord.Option(discord.SlashCommandOptionType.channel)):
+        await ctx.respond(f'Недоступно')
+
+        #
+        # from sumy.parsers.plaintext import PlaintextParser
+        # from sumy.nlp.tokenizers import Tokenizer
+        # from sumy.summarizers.lsa import LsaSummarizer
+
+        # total_text = ''
+        # async for message in channel.history(limit=500, oldest_first=True):
+        #     if message.author.id != self.bot.user.id:
+        #         total_text += message.clean_content + '\n\n'
+        #     print(total_text)
+
+        # summarizer = pipeline('summarization')
+        #
+        # summary_text_chunks = summarizer(total_text, max_length=2000, min_length=30, do_sample=False, language='russian')
+        # print(summary_text_chunks)
+        #
+        # summary_text = summary_text_chunks[0]['summary_text']
+
+        # parser = PlaintextParser.from_string(total_text, Tokenizer('russian'))
+        # summarizer = LsaSummarizer()
+
+        # summary = summarizer(parser.document, 5)
+        # summary_text = '\n\n'.join(str(sentence) for sentence in summary)
+        # await ctx.send(summary_text)
+
+    @cur.command(name='архивировать')
+    @BasicCog.admin_required
+    async def __archive(self, ctx: discord.ApplicationContext,
+                        target_channel: discord.Option(discord.SlashCommandOptionType.channel),
+                        archive_channel: discord.Option(discord.SlashCommandOptionType.channel),
+                        message_limit: discord.Option(int, required=False, min_value=100, default=None)):
+        from ArbRolePlay import DataMessage
+
+        if ctx.author.id != ctx.guild.owner_id and (message_limit is None or message_limit > 5000):
+            await ctx.respond('Ограничение на количество сообщений превышено', ephemeral=True)
+            return
+
+        await ctx.respond('***Происходит архивация...***', ephemeral=True)
+
+        total_messages = []
+        async for message in target_channel.history(limit=message_limit, oldest_first=True):
+            print(f'АРХИВАЦИЯ - {message.content}')
+            total_messages.append(message)
+
+        data_messages = DataMessage(self.bot, total_messages, archive_channel.id)
+        await data_messages.archivate()
+
+
 def setup(bot):
+
     bot.add_cog(AdminTools(bot))

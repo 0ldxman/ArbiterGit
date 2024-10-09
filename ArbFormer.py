@@ -95,7 +95,7 @@ class Pattern:
         # Генерируем все возможные комбинации регистра для слов
         for cases in itertools.product(*[self.case_variations(word) for word in words]):
             case_variations.append(' '.join(cases))
-        return [f'{case}:\s*(.+)' for case in case_variations]
+        return [f'{case}:\\s*(.+)' for case in case_variations]
 
     def case_variations(self, word: str) -> List[str]:
         # Генерация вариаций регистра для одного слова

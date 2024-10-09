@@ -1,5 +1,7 @@
 import asyncio
+import datetime
 import pprint
+import random
 
 from ArbDatabase import DataManager
 import discord
@@ -594,3 +596,123 @@ class VoteView(View):
             await self.send_winner_embed(winner)
         else:
             await self.send_canceled_embed()
+
+
+@dataclass()
+class RPS_Player:
+    character_id:int
+    character_name: str
+    player: discord.User = None
+
+
+
+class RPS:
+    def __init__(self, player1: RPS_Player, player2: RPS_Player, timeout: int = 30):
+        self.user_1 = player1.player
+        self.user_2 = player2.player
+
+        self.user_1_data = player1
+        self.user_2_data = player2
+
+        self.timeout = timeout
+        self.choices = {player1.character_id: None, player2.character_id: None}
+        self.results_message = None
+
+        print(self.user_1, self.user_2)
+
+    def get_player_character(self, player_id:int):
+        if self.user_1_data.player.id == player_id:
+            return self.user_1_data.character_id
+        elif self.user_2_data.player.id == player_id:
+            return self.user_2_data.character_id
+        else:
+            return None
+
+    async def send_buttons(self, ctx: commands.Context, embed):
+        if self.user_1:
+            view1 = self.create_choice_view(self.user_1)
+            await self.user_1.send(view=view1, embed=embed)
+        else:
+            self.choices[self.user_1_data.character_id] = random.choice(["Камень", "Ножницы", "Бумага"])
+
+        if self.user_2:
+            view2 = self.create_choice_view(self.user_2)
+            await self.user_2.send(view=view2, embed=embed)
+        else:
+            self.choices[self.user_2_data.character_id] = random.choice(["Камень", "Ножницы", "Бумага"])
+
+        if not all(self.choices.values()):
+            await self.wait_for_responses(ctx)
+        else:
+            await self.determine_winner()
+
+    async def wait_for_responses(self, ctx: commands.Context):
+        await discord.utils.sleep_until(discord.utils.utcnow() + datetime.timedelta(seconds=self.timeout))
+
+        for player_id in self.choices:
+            if not self.choices[player_id]:
+                self.choices[player_id] = random.choice(["Камень", "Ножницы", "Бумага"])
+
+        await self.determine_winner()
+
+    def create_choice_view(self, player: discord.User):
+        view = discord.ui.View()
+
+        buttons = [
+            discord.ui.Button(label="Камень", style=discord.ButtonStyle.grey),
+            discord.ui.Button(label="Ножницы", style=discord.ButtonStyle.grey),
+            discord.ui.Button(label="Бумага", style=discord.ButtonStyle.grey),
+        ]
+
+        for button in buttons:
+            button.callback = lambda interaction, b=button: self.make_choice(interaction, player, b.label)
+            view.add_item(button)
+
+        return view
+
+    async def make_choice(self, interaction: discord.Interaction, player: discord.User, choice: str):
+        player_character = self.get_player_character(player.id)
+
+        self.choices[player_character] = choice
+        await interaction.response.send_message(f"Вы выбрали: {choice}", ephemeral=True)
+
+        # Если оба игрока сделали выбор
+        if all(self.choices.values()):
+            await self.determine_winner()
+
+    async def determine_winner(self):
+        p1_choice = self.choices[self.user_1_data.character_id]
+        p2_choice = self.choices[self.user_2_data.character_id]
+
+        result = self.get_winner(p1_choice, p2_choice)
+
+        # Сообщение с результатом
+        result_message = f"**{self.user_1_data.character_name}** выбрал(а) — `{p1_choice}`\n**{self.user_2_data.character_name}** выбрал(а) — `{p2_choice}`\n"
+        if result == 0:
+            embed = ArbEmbed('Ничья!', result_message,
+                             footer=self.user_1_data.character_name + ', ' + self.user_2_data.character_name)
+        elif result == 1:
+            embed = SuccessEmbed(f'Победа {self.user_1_data.character_name}!', result_message,
+                                 footer=self.user_1_data.character_name)
+        else:
+            embed = SuccessEmbed(f"Победил {self.user_2_data.character_name}!", result_message,
+                                 footer=self.user_2_data.character_name)
+
+        if self.results_message:
+            await self.results_message.edit(embed=embed)
+        else:
+            print(result_message)  # Редактируем сообщение в основном чате, если нужно.
+
+    def get_winner(self, p1_choice: str, p2_choice: str):
+        win_conditions = {
+            "Камень": "Ножницы",
+            "Ножницы": "Бумага",
+            "Бумага": "Камень"
+        }
+
+        if p1_choice == p2_choice:
+            return 0  # Ничья
+        elif win_conditions[p1_choice] == p2_choice:
+            return 1  # Победа первого игрока
+        else:
+            return 2  # Победа второго игрока

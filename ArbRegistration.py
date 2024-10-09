@@ -238,10 +238,9 @@ class RegForm(DataModel):
         await author.send('', embed=embed)
 
     async def send_deny_respond(self, ctx, reason:str=None):
-        author = ctx.bot.get_user(self.author)
         embed = ErrorEmbed('Анкета отклонена',
                            f'Анкета персонажа **{self.form_data.get("name")}** была отклонена по причине:```\n{reason if reason else "Причина не указана администратором"}```')
-        await author.send('', embed=embed)
+        await ctx.respond('', embed=embed)
 
     async def send_notification(self, ctx):
         from ArbCore import Server
@@ -300,7 +299,6 @@ AddItem.Berets()'''
         template = CharacterTemplate.from_text(total_text, 0, data_manager=self.data_manager)
         print(template.to_text())
         character_id = template.insert_data()
-
 
         race = Race(self.form_data.get('race'), data_manager=self.data_manager)
         avg_age = (race.race_range_min + race.race_range_max)/2

@@ -1,6 +1,6 @@
 import pprint
 
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataManager, DataModel, DataObject, EID, DEFAULT_MANAGER
 from ArbRaces import Race
 
 import random
@@ -8,18 +8,38 @@ from dataclasses import dataclass
 from ArbDamage import Damage, DamageType
 
 
-class CapacityType(DataModel):
+class CapacityType(DataObject):
     def __init__(self, capacity_id: str, **kwargs):
         self.capacity_id = capacity_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        super().__init__('CAPACITY_INIT', f'id = "{self.capacity_id}"', data_manager=self.data_manager)
+        super(CapacityType, self).__init__('CAPACITY_INIT', EID(id=self.capacity_id), kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label', 'Неизвестная способность')
-        self.description = self.get('desc', 'Нет описания способности')
-        self.mortality = self.get('mortality', 0)
-        self.critical_value = self.get('critical_value', 0)
-        self.critical_effect = self.get('critical_effect', None)
+        self._label = self.field('label', 'Неизвестная физиология')
+        self._description = self.field('description', 'Нет описания способности')
+        self._mortality = self.field('mortality', 0)
+        self._critical_value = self.field('critical_value', 0)
+        self._critical_effect = self.field('critical_effect', None)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def description(self) -> str:
+        return self._description.load(self.data_manager)
+
+    @property
+    def mortality(self) -> float:
+        return self._mortality.load(self.data_manager)
+
+    @property
+    def critical_value(self) -> int:
+        return self._critical_value.load(self.data_manager)
+
+    @property
+    def critical_effect(self) -> str:
+        return self._critical_effect.load(self.data_manager)
+
 
     def get_affected_capacities(self, capacity_value: float):
         if not self.data_manager.check('CAPACITIES_AFFECTS', f'capacity = "{self.capacity_id}"'):
@@ -27,13 +47,11 @@ class CapacityType(DataModel):
 
         affects = self.data_manager.select_dict('CAPACITIES_AFFECTS', filter=f'capacity = "{self.capacity_id}"')
         diff = capacity_value - 100
-        affected_capacities = {}
-        for affect in affects:
-            a_diff = diff * affect.get('weight')
-            if abs(a_diff) > affect.get('max'):
-                a_diff = (a_diff / a_diff) * affect.get('max')
 
-            affected_capacities[affect.get('affect')] = a_diff
+        affected_capacities = {
+            affect['affect']: max(min(diff * affect['weight'], affect['max']), -affect['max'])
+            for affect in affects
+        }
 
         return affected_capacities
 
@@ -41,22 +59,62 @@ class CapacityType(DataModel):
         return f'Capacity.{self.capacity_id}'
 
 
-class InjuryType(DataModel):
+class InjuryType(DataObject):
     def __init__(self, injury_id: str, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
         self.injury_type_id = injury_id
-        super().__init__('INJURY_INIT', f'id = "{self.injury_type_id}"', data_manager=self.data_manager)
 
-        self.damage_type = self.get('damage_type', None)
+        super(InjuryType, self).__init__('INJURY_INIT', EID(id=self.injury_type_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label', 'Неизвестная рана')
-        self.pain_per_severity = self.get('pain_per_severity', 0)
-        self.scar_pain_per_severity = self.get('scar_pain_factor', 0)
-        self.bleeding = self.get('bleeding', 0) if self.get('bleeding', None) is not None else 0
-        self.treatment = self.get('treatment_per_cycle', 0) if self.get('treatment_per_cycle', None) is not None else 0
-        self.infection_chance = self.get('infection_chance', 0)
-        self.scar_chance = self.get('scar_chance', 0)
-        self.scar_label = self.get('scar_label', 'Неизвестный шрам')
+        self._damage_type = self.field('damage_type', None)
+        self._label = self.field('label', 'Неизвестная рана')
+        self._pain_per_severity = self.field('pain_per_severity', 0)
+        self._scar_pain_per_severity = self.field('scar_pain_factor', 0)
+        self._bleeding = self.field('bleeding', 0)
+        self._treatment = self.field('treatment_per_cycle', 0)
+        self._infection_chance = self.field('infection_chance', 0)
+        self._scar_chance = self.field('scar_chance', 0)
+        self._scar_label = self.field('scar_label', 'Неизвестный шрам')
+
+    @property
+    def damage_type(self) -> str:
+        return self._damage_type.load(self.data_manager)
+
+    @property
+    def damage_type_id(self) -> str:
+        return self.damage_type
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def pain_per_severity(self) -> int:
+        return self._pain_per_severity.load(self.data_manager)
+
+    @property
+    def scar_pain_per_severity(self) -> int:
+        return self._scar_pain_per_severity.load(self.data_manager)
+
+    @property
+    def bleeding(self) -> int:
+        return self._bleeding.load(self.data_manager)
+
+    @property
+    def treatment(self) -> int:
+        return self._treatment.load(self.data_manager)
+
+    @property
+    def infection_chance(self) -> float:
+        return self._infection_chance.load(self.data_manager)
+
+    @property
+    def scar_chance(self) -> float:
+        return self._scar_chance.load(self.data_manager)
+
+    @property
+    def scar_label(self) -> str:
+        return self._scar_label.load(self.data_manager)
+
 
     def destroyed_label(self):
         if self.damage_type:
@@ -68,22 +126,84 @@ class InjuryType(DataModel):
         return f'Injury.{self.injury_type_id}'
 
 
-class Injury(DataModel):
+class Injury(DataObject):
     def __init__(self, injury_id: int, **kwargs):
         self.injury_id = injury_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        DataModel.__init__(self, f'CHARS_INJURY', f'id_inj = {self.injury_id}', data_manager=self.data_manager)
-        self.character_id = self.get('id', None)
-        self.place = self.get('place', None)
-        self.root = self.get('root', 'Неизвестно')
-        self.damage = self.get('damage', 0)
-        self.healing_efficiency = self.get('heal_efficiency', 0) if self.get('heal_efficiency', 0) is not None else 0
-        self.is_scar = self.get('is_scar', 0) == 1
-        self.injury_type = InjuryType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
+
+        DataObject.__init__(self, 'CHARS_INJURY', EID(id_inj=self.injury_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._character_id = self.field('id', None)
+        self._place = self.field('place', None)
+        self._root = self.field('root', 'Неизвестно')
+        self._damage = self.field('damage', 0)
+        self._healing_efficiency = self.field('heal_efficiency', 0)
+        self._is_scar = self.field('is_scar', 0)
+        self._injury_type = self.field('type', None)
+
+    @property
+    def character_id(self) -> int:
+        return self._character_id.load(self.data_manager)
+
+    @property
+    def character(self):
+        from ArbCharacters import Character
+        character_id = self.character_id
+        if character_id is None:
+            return None
+
+        return Character(character_id, data_manager=self.data_manager)
+
+    @property
+    def place(self) -> str:
+        return self._place.load(self.data_manager)
+
+    @property
+    def root(self) -> str:
+        return self._root.load(self.data_manager)
+
+    @property
+    def damage(self) -> int:
+        return self._damage.load(self.data_manager)
+
+    @damage.setter
+    def damage(self, value: int):
+        self._damage.save(self.data_manager, value)
+
+    @property
+    def healing_efficiency(self) -> int:
+        return self._healing_efficiency.load(self.data_manager)
+
+    @healing_efficiency.setter
+    def healing_efficiency(self, value: int):
+        self._healing_efficiency.save(self.data_manager, value)
+
+    @property
+    def is_scar(self) -> bool:
+        return self._is_scar.load(self.data_manager) == 1
+
+    @is_scar.setter
+    def is_scar(self, value: bool):
+        self._is_scar.save(self.data_manager, int(value))
+
+    @property
+    def injury_type(self) -> InjuryType | None:
+        injury_type = self._injury_type.load(self.data_manager)
+        if not injury_type:
+            return None
+
+        return InjuryType(injury_type, data_manager=self.data_manager)
+
+    @property
+    def body_element(self) -> 'BodyElement':
+        place = self.place
+        if not place:
+            return None
+        return BodyElement(self.character_id, place, data_manager=self.data_manager)
+
 
     @classmethod
     def create_injury(cls, character_id:int, injury_type:str, place:str, damage:int, root:str=None, heal_efficiency:int=0, is_scar:bool=False):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         id_inj = db.maxValue('CHARS_INJURY', 'id_inj') + 1
 
         query = {
@@ -100,10 +220,9 @@ class Injury(DataModel):
         db.insert('CHARS_INJURY', query)
         return cls(id_inj, character_id=character_id, data_manager=db)
 
-
     @classmethod
-    def get_character_injuries(cls, character_id: int, data_manager: DataManager = None, place: str = None) -> dict[str, list['Injury']]:
-        db = data_manager if data_manager is not None else DataManager()
+    def get_character_injuries(cls, character_id: int, data_manager: DataManager = DEFAULT_MANAGER, place: str = None) -> dict[str, list['Injury']]:
+        db = data_manager
 
         if place is not None:
             respond = [(Injury(inj_id.get('id_inj'), data_manager=db), inj_id.get('place'))
@@ -132,7 +251,6 @@ class Injury(DataModel):
 
     def set_healing(self, value: float):
         self.healing_efficiency = value
-        self.update_record({'heal_efficiency': self.healing_efficiency})
 
     def change_healing(self, value: float):
         new_healing = self.healing_efficiency + value
@@ -140,7 +258,6 @@ class Injury(DataModel):
 
     def set_damage(self, value: float):
         self.damage = value
-        self.update_record({'damage': self.damage})
 
     def change_damage(self, value: float):
         new_damage = self.damage + value
@@ -164,10 +281,11 @@ class Injury(DataModel):
     def roll_scare(self):
         if random.randint(1, 100) <= int(self.injury_type.scar_chance):
             self.is_scar = True
-            self.update_record({'is_scar': 1})
 
-    def update(self):
-        damage_recovery_speed = self.injury_type.treatment * self.get_healing_bonus()
+    def update(self, filtration:int=100):
+        filt_bonus = filtration / 100
+
+        damage_recovery_speed = self.injury_type.treatment * self.get_healing_bonus() * filt_bonus
 
         self.roll_scare()
         self.roll_infection()
@@ -194,52 +312,154 @@ class Injury(DataModel):
 
     @staticmethod
     def delete_all_character_injuries(character_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_INJURY', f'id = {character_id}')
 
     @staticmethod
     def delete_injury(injury_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_INJURY', f'id_inj = {injury_id}')
 
+    @staticmethod
+    def delete_injuries_in_place(character_id:int, place_id:str):
+        db = DEFAULT_MANAGER
+        db.delete('CHARS_INJURY', f'id = {character_id} AND place = "{place_id}"')
 
-class DiseaseType(DataModel):
+
+class DiseaseType(DataObject):
     def __init__(self, id: str, **kwargs):
         self.disease_type_id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__('DISEASE_INIT', f'id = "{self.disease_type_id}"', data_manager=self.data_manager)
+        super(DiseaseType, self).__init__('DISEASE_INIT', EID(id=self.disease_type_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label', 'Неизвестное заболевание')
-        self.mortality = self.get('mortality', 0) == 1
-        self.severity_per_cycle = self.get('severity_per_cycle', 0)
-        self.immunity_per_cycle = self.get('immunity_per_cycle', 0)
-        self.can_be_treated = self.get('can_be_treated', 0) == 1
-        self.treatment_per_cycle = self.get('treatment_per_cycle', 0)
-        self.pain_offset = self.get('pain_offset', 0)
-        self.capacity = self.get('capacity', None)
-        self.capacity_offset = self.get('capacity_offset', 0)
-        self.next_stage = self.get('next_stage', None)
+        self._label = self.field('label', 'Неизвестное заболевание')
+        self._mortality = self.field('mortality', 0)
+        self._severity_per_cycle = self.field('severity_per_cycle', 0)
+        self._immunity_per_cycle = self.field('immunity_per_cycle', 0)
+        self._can_be_treated = self.field('can_be_treated', 0)
+        self._treatment_per_cycle = self.field('treatment_per_cycle', 0)
+        self._pain_offset = self.field('pain_offset', 0)
+        self._capacity = self.field('capacity', None)
+        self._capacity_offset = self.field('capacity_offset', 0)
+        self._next_stage = self.field('next_stage', None)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def mortality(self) -> bool:
+        return self._mortality.load(self.data_manager) == 1
+
+    @property
+    def severity_per_cycle(self) -> float:
+        return self._severity_per_cycle.load(self.data_manager)
+
+    @property
+    def immunity_per_cycle(self) -> float:
+        return self._immunity_per_cycle.load(self.data_manager)
+
+    @property
+    def can_be_treated(self) -> bool:
+        return self._can_be_treated.load(self.data_manager) == 1
+
+    @property
+    def treatment_per_cycle(self) -> float:
+        return self._treatment_per_cycle.load(self.data_manager)
+
+    @property
+    def pain_offset(self) -> float:
+        return self._pain_offset.load(self.data_manager)
+
+    @property
+    def capacity(self) -> str:
+        return self._capacity.load(self.data_manager)
+
+    @property
+    def capacity_id(self) -> str:
+        return self.capacity
+
+    @property
+    def capacity_offset(self) -> int:
+        return self._capacity_offset.load(self.data_manager)
+
+    @property
+    def next_stage(self) -> str:
+        return self._next_stage.load(self.data_manager)
 
     def __repr__(self):
         return f'Disease.{self.disease_type_id}'
 
 
-class Disease(DataModel):
+class Disease(DataObject):
     def __init__(self, disease_id: int, **kwargs):
         self.disease_id = disease_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        DataModel.__init__(self, f'CHARS_DISEASE', f'dis_id = {self.disease_id}', data_manager=self.data_manager)
-        self.character_id = self.get('id', None)
-        self.place = self.get('place') if self.get('place', None) is not None else 'Все тело'
-        self.current_severity = round(self.get('severity', 0), 2) if self.get('severity', None) is not None else 0
-        self.current_immunity = round(self.get('immunity', 0), 2) if self.get('immunity', None) is not None else 0
-        self.healing_efficiency = round(self.get('healing', 0), 2) if self.get('healing', None) is not None else 0
 
-        self.disease_type = DiseaseType(self.get('type'), data_manager=self.data_manager) if self.get('type', None) is not None else None
+        DataObject.__init__(self, 'CHARS_DISEASE', EID(dis_id=self.disease_id), data_manager = kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._character_id = self.field('id', None)
+        self._place = self.field('place', 'Все тело')
+        self._current_severity = self.field('severity', 0)
+        self._current_immunity = self.field('immunity', 0)
+        self._healing_efficiency = self.field('healing', 0)
+
+        self._disease_type = self.field('type', None)
+
+
+    @property
+    def character_id(self) -> int:
+        return self._character_id.load(self.data_manager)
+
+    @property
+    def place(self) -> str:
+        place = self._place.load(self.data_manager)
+        return place if place is not None else 'Все тело'
+
+    @property
+    def place_id(self) -> str:
+        place = self.place
+        return place if place != 'Все тело' else place
+
+    @property
+    def current_severity(self) -> float:
+        return self._current_severity.load(self.data_manager)
+
+    @current_severity.setter
+    def current_severity(self, value):
+        self._current_severity.save(self.data_manager, value)
+
+    @property
+    def current_immunity(self) -> float:
+        return self._current_immunity.load(self.data_manager)
+
+    @current_immunity.setter
+    def current_immunity(self, value):
+        self._current_immunity.save(self.data_manager, value)
+
+    @property
+    def healing_efficiency(self) -> float:
+        return self._healing_efficiency.load(self.data_manager)
+
+    @healing_efficiency.setter
+    def healing_efficiency(self, value):
+        self._healing_efficiency.save(self.data_manager, value)
+
+    @property
+    def disease_type(self) -> DiseaseType:
+        dis_type = self._disease_type.load(self.data_manager)
+        if not dis_type:
+            return None
+        return DiseaseType(dis_type, data_manager=self.data_manager)
+
+    @property
+    def body_element(self) -> 'BodyElement':
+        if not self.place_id:
+            return None
+        else:
+            return BodyElement(self.character_id, self.place_id, data_manager=self.data_manager)
 
     @classmethod
     def get_character_diseases(cls, character_id: int, data_manager: DataManager = None):
-        db = data_manager if data_manager is not None else DataManager()
+        db = data_manager if data_manager is not None else DEFAULT_MANAGER
         respond = [(Disease(dis_id.get('dis_id'), data_manager=db), dis_id.get('place')) for dis_id in db.select_dict('CHARS_DISEASE', filter=f'id = {character_id}')]
         total_dict = {}
         for disease, place in respond:
@@ -252,7 +472,7 @@ class Disease(DataModel):
 
     @classmethod
     def create_character_disease(cls, character_id: int, disease_type_id:str, **kwargs):
-        db = kwargs.get('data_manager', DataManager())
+        db = kwargs.get('data_manager', DEFAULT_MANAGER)
         dis_id = db.maxValue('CHARS_DISEASE', 'dis_id') + 1
 
         place = kwargs.get('place', None)
@@ -281,50 +501,61 @@ class Disease(DataModel):
         return self.current_severity * self.disease_type.pain_offset
 
     def add_severity(self, severity: float):
-        self.current_severity += severity
-        self.update_record({'severity': self.current_severity})
+        new_severity = self.current_severity + severity
+        self.set_severity(new_severity)
 
     def add_immunity(self, immunity: float):
-        self.current_immunity += immunity
-        self.update_record({'immunity': self.current_immunity})
+        new_immunity = self.current_immunity + immunity
+        self.set_immunity(new_immunity)
 
     def add_healing(self, healing: float):
-        self.healing_efficiency += healing
-        self.update_record({'healing': self.healing_efficiency})
+        new_healing = self.healing_efficiency + healing
+        self.set_healing(new_healing)
 
-    def set_healing(self, healing:float):
+    def set_immunity(self, immunity: float):
+        self.current_immunity = immunity
+
+    def set_healing(self, healing: float):
         self.healing_efficiency = healing
-        self.update_record({'healing': self.healing_efficiency})
 
-    def set_severity(self, severity:float):
+    def set_severity(self, severity: float):
         self.current_severity = severity
-        self.update_record({'severity': self.current_severity})
 
     def get_healing_bonus(self):
-        healing_bonus = 0.5 + self.healing_efficiency * 0.01
+        # В случае дисбаланса аптечек поменять на 0.5
+        healing_bonus = 1 + self.healing_efficiency * 0.01
         return healing_bonus
 
-    def update(self):
+    def update(self, filtration:int=100):
         treatment = self.disease_type.treatment_per_cycle * self.get_healing_bonus()
+        filt_bonus = filtration / 100
 
         if self.current_severity >= 100 and self.disease_type.mortality:
+            print('Я КАКОГО-ТО ХУЯ ТУТ ЗАБЫЛ', self.disease_type.mortality, self.disease_type)
             return
 
-        self.add_immunity(self.disease_type.immunity_per_cycle * self.get_healing_bonus())
+        self.add_immunity(self.disease_type.immunity_per_cycle * self.get_healing_bonus() * filt_bonus)
 
         if self.current_immunity >= 100:
             self.add_severity(-1 * treatment)
             if self.current_severity > 100:
-                self.add_severity(-1 * (self.current_severity - 100))
+                self.set_severity(100)
 
             if self.current_severity <= 0:
                 self.delete_record()
         else:
-            if self.current_severity+self.disease_type.severity_per_cycle < 100:
-                self.add_severity(self.disease_type.severity_per_cycle)
+            if self.disease_type.severity_per_cycle > 0:
+                print('НА САМОМ ДЕЛЕ ТУТ ЛЕЧУ', self.disease_type, self.disease_type.severity_per_cycle)
+                if self.current_severity + self.disease_type.severity_per_cycle < 100:
+                    self.add_severity(self.disease_type.severity_per_cycle)
+                else:
+                    self.set_severity(100)
             else:
-                self.set_severity(100)
+                print('ТУТ ЛЕЧУ')
+                self.add_severity(self.disease_type.severity_per_cycle)
 
+        if self.current_severity <= 0:
+            self.delete_disease(self.disease_id)
 
     def get_body_element(self):
         if not self.place or self.place == 'Все тело':
@@ -345,43 +576,103 @@ class Disease(DataModel):
 
     @staticmethod
     def delete_all_character_diseases(character_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_DISEASE', f'id = {character_id}')
 
     @staticmethod
     def delete_disease(dis_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_DISEASE', f'dis_id = {dis_id}')
 
 
-
-
-
-
-
-
-
-
-class BodyPart(DataModel):
+class BodyPart(DataObject):
     def __init__(self, part_id:str, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__('RACES_BODYPART', f'part_id = "{part_id}"', data_manager=self.data_manager)
-        self.race = self.get('race', None)
-        self.part_id = self.get('part_id', None)
-        self.label = self.get('label', 'Неизвестная конечность')
-        self.type = self.get('type', None)
-        self.body_parts_group = self.get('group', None)
-        self.weapon_slot = self.get('weapon_slot', 0) if self.get('weapon_slot', None) is not None else 0
-        self.coverage = self.get('coverage', 0)
-        self.parent_part = self.get('subpart_of', None)
-        self.is_internal = self.get('internal', 0) == 1
-        self.max_health = self.get('health', 0)
-        self.capacity = self.get('capacity', None)
-        self.efficiency = self.get('efficiency', 0)
-        self.mortality = self.get('mortality', 0)
-        self.bleeding_rate = self.get('bleed_rate', 1)
-        self.scar_chance = self.get('scar_chance', 0)
-        self.pain_factor = self.get('pain_factor', 1)
+        super(BodyPart, self).__init__('RACES_BODYPART', EID(part_id=part_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._race = self.field('race', None)
+        self._part_id = self.field('part_id', None)
+        self._label = self.field('label', 'Неизвестная конечность')
+        self._type = self.field('type', None)
+        self._body_parts_group = self.field('body_group', None)
+        self._weapon_slot = self.field('weapon_slot', 0)
+        self._coverage = self.field('coverage', 0)
+        self._parent_part = self.field('subpart_of', None)
+        self._is_internal = self.field('internal', 0)
+        self._max_health = self.field('health', 0)
+        self._capacity = self.field('capacity', None)
+        self._efficiency = self.field('efficiency', 0)
+        self._mortality = self.field('mortality', 0)
+        self._bleeding_rate = self.field('bleed_rate', 1)
+        self._scar_chance = self.field('scar_chance', 0)
+        self._pain_factor = self.field('pain_factor', 1)
+
+    @property
+    def race(self) -> str:
+        return self._race.load(self.data_manager)
+
+    @property
+    def race_id(self) -> str:
+        return self.race
+
+    @property
+    def part_id(self) -> str:
+        return self._part_id.load(self.data_manager)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def type(self) -> str:
+        return self._type.load(self.data_manager)
+
+    @property
+    def body_parts_group(self) -> str:
+        return self._body_parts_group.load(self.data_manager)
+
+    @property
+    def weapon_slot(self) -> int:
+        return self._weapon_slot.load(self.data_manager)
+
+    @property
+    def coverage(self) -> float:
+        return self._coverage.load(self.data_manager)
+
+    @property
+    def parent_part(self) -> str:
+        return self._parent_part.load(self.data_manager)
+
+    @property
+    def is_internal(self) -> bool:
+        return self._is_internal.load(self.data_manager) == 1
+
+    @property
+    def max_health(self) -> float:
+        return self._max_health.load(self.data_manager)
+
+    @property
+    def capacity(self) -> str:
+        return self._capacity.load(self.data_manager)
+
+    @property
+    def efficiency(self) -> float:
+        return self._efficiency.load(self.data_manager)
+
+    @property
+    def mortality(self) -> float:
+        return self._mortality.load(self.data_manager)
+
+    @property
+    def bleeding_rate(self) -> float:
+        return self._bleeding_rate.load(self.data_manager)
+
+    @property
+    def scar_chance(self) -> float:
+        return self._scar_chance.load(self.data_manager)
+
+    @property
+    def pain_factor(self) -> float:
+        return self._pain_factor.load(self.data_manager)
 
     def find_children_bodyparts(self):
         query = f'subpart_of = "{self.part_id}"'
@@ -440,49 +731,120 @@ class BodyPart(DataModel):
         return f'BodyPart.{self.part_id}'
 
 
-class ImplantType(DataModel):
+class ImplantType(DataObject):
     def __init__(self, implant_id: str, **kwargs):
         self.implant_type_id = implant_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__('IMPLANTS_INIT', f'id = "{self.implant_type_id}"', data_manager=self.data_manager)
 
-        self.label = self.get('label', 'Неизвестный имплант')
-        self.install_slot = self.get('slot', None)
-        self.is_replacing = self.get('is_replacing') == 1
-        self.max_health = self.get('health', 0)
-        self.capacity = self.get('capacity', None)
-        self.capacity_efficiency = self.get('capacity_offset', 0)
-        self.weapon_slot = self.get('weapon_slot', 0) if self.get('weapon_slot', None) is not None else 0
+        super(ImplantType, self).__init__('IMPLANTS_INIT', EID(id=self.implant_type_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        print(self.__dict__)
+        self._label = self.field('label', 'Неизвестный имплант')
+        self._install_slot = self.field('slot', None)
+        self._is_replacing = self.field('is_replacing', 0)
+        self._max_health = self.field('health', 0)
+        self._capacity = self.field('capacity', None)
+        self._capacity_efficiency = self.field('capacity_offset', 0)
+        self._weapon_slot = self.field('weapon_slot', 0)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def install_slot(self) -> str:
+        return self._install_slot.load(self.data_manager)
+
+    @property
+    def is_replacing(self) -> bool:
+        return self._is_replacing.load(self.data_manager) == 1
+
+    @property
+    def max_health(self) -> float:
+        return self._max_health.load(self.data_manager)
+
+    @property
+    def capacity(self) -> str:
+        return self._capacity.load(self.data_manager)
+
+    @property
+    def capacity_efficiency(self) -> float:
+        return self._capacity_efficiency.load(self.data_manager)
+
+    @property
+    def weapon_slot(self) -> int:
+        return self._weapon_slot.load(self.data_manager)
 
     def __repr__(self):
         return f'ImplantType.{self.implant_type_id}'
 
 
-class Implant(DataModel):
+class Implant(DataObject):
     def __init__(self, implant_id: int, **kwargs):
         self.imp_id = implant_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        super().__init__('CHARS_BODY', f'imp_id = {self.imp_id}', data_manager=self.data_manager)
-        self.character_id = self.get('id', None)
-        self.place = self.get('place', None)
-        self.type = ImplantType(self.get('type', None), data_manager=self.data_manager) if self.get('type', None) is not None else None
-        self.label = self.get('label', self.type.label if self.type is not None else 'Неизвестный имплант') if self.get('label', None) is not None else self.type.label if self.type is not None else 'Неизвестный имплант'
+
+        super(Implant, self).__init__('CHARS_BODY', EID(imp_id=self.imp_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._character_id = self.field('id', None)
+        self._place = self.field('place', None)
+        self._type = self.field('type', None)
+        self._label = self.field('label', None)
+
+    @property
+    def character_id(self) -> int:
+        return self._character_id.load(self.data_manager)
+
+    @property
+    def character(self):
+        from ArbCharacters import Character
+        character_id = self.character_id
+        return Character(character_id, data_manager=self.data_manager) if character_id is not None else None
+
+    @property
+    def place(self) -> str:
+        return self._place.load(self.data_manager)
+
+    @property
+    def place_id(self) -> str:
+        return self.place
+
+    @property
+    def body_part(self) -> BodyPart | None:
+        if self.place_id:
+            return BodyPart(self.place_id, data_manager=self.data_manager)
+        else:
+            return None
+
+    @property
+    def type(self) -> ImplantType | None:
+        implant_type = self._type.load(self.data_manager)
+        if not implant_type:
+            return None
+        return ImplantType(implant_type, data_manager=self.data_manager)
+
+    @property
+    def label(self) -> str:
+        label = self._label.load(self.data_manager)
+        if not label:
+            implant_type = self.type
+            if not implant_type:
+                return f'Неизвестный имплант'
+            else:
+                return implant_type.label
+        else:
+            return label
 
     @staticmethod
     def delete_all_character_implants(character_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_BODY', f'id = {character_id}')
 
     @staticmethod
     def delete_implant(implant_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         db.delete('CHARS_BODY', f'imp_id = {implant_id}')
 
     @classmethod
     def create_implant(cls, character_id:int, implant_type:str, place:str=None, label:str=None):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         imp_id = db.maxValue('CHARS_BODY', 'imp_id') + 1
         query = {
             'id': character_id,
@@ -494,54 +856,201 @@ class Implant(DataModel):
 
         db.insert('CHARS_BODY', query)
 
+        new_implant = Implant(imp_id, data_manager=db)
+        if new_implant.type.is_replacing and place:
+            Injury.delete_injuries_in_place(character_id, place)
+
         return Implant(imp_id, data_manager=db)
 
 
-
-class BodyElement(BodyPart):
-    def __init__(self, character_id:int, element_id, **kwargs):
+class BodyElement:
+    def __init__(self, character_id: int, element_id, **kwargs):
         self.character_id = character_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.data_manager = kwargs.get('data_manager', DEFAULT_MANAGER)
         self.element_id = element_id
 
-        BodyPart.__init__(self, element_id, data_manager=self.data_manager)
-        replaced_implant = self.check_if_replaced_with_implant()
+        self._body_part = None
+        self._implant = None
 
-        if not self.part_id:
-            implant = Implant(self.element_id, data_manager=self.data_manager)
-        elif self.part_id and replaced_implant:
-            implant = Implant(replaced_implant, data_manager=self.data_manager)
+        if self.check_if_element_implant():
+            self._implant = Implant(self.element_id, data_manager=self.data_manager)
         else:
-            implant = None
+            self._body_part = BodyPart(self.element_id, data_manager=self.data_manager)
 
-        if implant:
-            self.implant_type = implant.type
-            self.label = f'{implant.label}' + f'{f" ({self.label})" if implant.place and self.label else ""}'
-            self.max_health = implant.type.max_health
-            self.capacity = implant.type.capacity
-            self.efficiency = implant.type.capacity_efficiency
-            self.weapon_slot = implant.type.weapon_slot
-            self.scar_chance = 0
-            self.parent_part = implant.place if not implant.type.is_replacing else self.parent_part
+        implant_id = self.check_element_replaced_with_implant()
+        if implant_id:
+            self._implant = Implant(implant_id, data_manager=self.data_manager)
+
+    @property
+    def body_part(self) -> BodyPart | None:
+        return self._body_part
+
+    @property
+    def implant(self) -> Implant | None:
+        return self._implant
+
+    @property
+    def race(self) -> str | None:
+        if self._body_part:
+            return self._body_part.race
         else:
-            self.implant_type = None
+            return None
+
+    @property
+    def race_id(self) -> str:
+        return self.race
+
+    @property
+    def part_id(self) -> str | None:
+        if self._body_part:
+            return self._body_part.part_id
+        elif self._implant:
+            return f'{self._implant.imp_id}'
+
+    @property
+    def label(self) -> str:
+        if not self._body_part:
+            if not self._implant.body_part:
+                return self._implant.label
+            else:
+                return f'{self._implant.label} ({self._implant.body_part.label})'
+        else:
+            if not self._implant:
+                return self._body_part.label
+            else:
+                return f'{self._body_part.label} ({self._implant.label})'
+
+    @property
+    def type(self) -> str | None:
+        if self._body_part:
+            return self._body_part.type
+        else:
+            return None
+
+    @property
+    def body_parts_group(self) -> str | None:
+        if self._body_part:
+            return self._body_part.body_parts_group
+        elif self._implant:
+            return self._implant.body_part.body_parts_group
+        else:
+            return None
+
+    @property
+    def weapon_slot(self) -> int:
+        if self._implant:
+            return self._implant.type.weapon_slot
+        elif self._body_part:
+            return self._body_part.weapon_slot
+        else:
+            return 0
+
+    @property
+    def coverage(self) -> float:
+        if self._body_part:
+            return self._body_part.coverage
+        elif self._implant:
+            return 1
+        else:
+            return 0
+
+    @property
+    def parent_part(self) -> str | None:
+        if self._body_part:
+            return self._body_part.parent_part
+        elif self._implant:
+            return self._implant.place_id
+        else:
+            return None
+
+    @property
+    def is_internal(self) -> bool:
+        if self._body_part:
+            return self._body_part.is_internal
+        else:
+            return True
+
+    @property
+    def max_health(self) -> float:
+        if self._implant:
+            return self._implant.type.max_health
+        elif self._body_part:
+            return self._body_part.max_health
+        else:
+            return 0
+
+    @property
+    def capacity(self) -> str | None:
+        if self._implant:
+            return self._implant.type.capacity
+        elif self._body_part:
+            return self._body_part.capacity
+        else:
+            return None
+
+    @property
+    def efficiency(self) -> float:
+        if self._implant:
+            return self._implant.type.capacity_efficiency
+        elif self._body_part:
+            return self._body_part.efficiency
+        else:
+            return 0
+
+    @property
+    def mortality(self) -> float:
+        if self._body_part:
+            return self._body_part.mortality
+        else:
+            return 0
+
+    @property
+    def bleeding_rate(self) -> float:
+        if self._implant:
+            return 0
+        elif self._body_part:
+            return self._body_part.bleeding_rate
+        else:
+            return 0
+
+    @property
+    def scar_chance(self) -> float:
+        if self._implant:
+            return 0
+        elif self._body_part:
+            return self._body_part.scar_chance
+        else:
+            return 1
+
+    @property
+    def pain_factor(self) -> float:
+        if self._implant:
+            return 0
+        elif self._body_part:
+            return self._body_part.pain_factor
+        else:
+            return 1
 
     def set_group(self, group:str):
         self.body_parts_group = group
 
-    def check_if_replaced_with_implant(self):
-        if not self.data_manager.check('CHARS_BODY', f'id = {self.character_id}'):
+    def check_if_element_implant(self):
+        if isinstance(self.element_id, int):
+            return True
+        else:
             return False
 
+    def check_element_replaced_with_implant(self):
+        if not self.data_manager.check('CHARS_BODY', f'id = {self.character_id}'):
+            return None
         if self.data_manager.check('CHARS_BODY', f'id = {self.character_id} AND place = "{self.element_id}"'):
             imp_id = self.data_manager.select_dict('CHARS_BODY', filter=f'id = {self.character_id} AND place = "{self.element_id}"')[0].get('imp_id')
-            print('ИМПЛАНТ', imp_id)
             if Implant(imp_id, data_manager=self.data_manager).type.is_replacing:
                 return imp_id
             else:
-                return False
+                return None
         else:
-            return False
+            return None
 
     def calculate_recieved_damage(self):
         damage_on_part = Injury.get_character_injuries(self.character_id, self.data_manager, self.element_id)
@@ -549,14 +1058,23 @@ class BodyElement(BodyPart):
         return total_damage
 
     def calculate_health(self):
-        if self.max_health > 0:
-            health = (self.max_health - self.calculate_recieved_damage()) / self.max_health if self.max_health > 0 else 0
-            if health > 0:
-                return health
-            else:
+        # Проверяем здоровье родительской части
+        if self.parent_part:
+            parent_health = self.get_parent_health(self.parent_part, self.character_id, self.data_manager)
+            if parent_health <= 0:
+                # Если родительская часть уничтожена, текущая часть тоже уничтожена
                 return 0
+
+        # Рассчитываем здоровье текущей части
+        if self.max_health > 0:
+            health = (self.max_health - self.calculate_recieved_damage()) / self.max_health
+            return max(0, health)
         else:
             return 0
+
+    @classmethod
+    def get_parent_health(cls, parent_part: str, character_id:int, data_manager: DataManager = DEFAULT_MANAGER):
+        return BodyElement(character_id, parent_part, data_manager=data_manager).calculate_health()
 
     def calculate_efficiency(self):
         if not self.efficiency:
@@ -592,6 +1110,8 @@ class BodyElement(BodyPart):
 
         # Генерируем случайное число в диапазоне от 0 до общего покрытия
         roll = random.uniform(0, total_coverage)
+
+        print('КУБИК ВЫБОРА РАНДОМНОЙ ЧАСТИ ТЕЛА:', roll, current_part.coverage, total_coverage, current_part.label)
 
         # Проверяем текущую часть тела
         if roll <= current_part.coverage:
@@ -650,10 +1170,12 @@ class BodyElement(BodyPart):
                 self.apply_damage(dam, effect=apply_effect)
 
     def get_race_attack(self):
-        if self.implant_type:
-            if self.data_manager.check('IMPLANTS_MELEE', f'implant_id = "{self.implant_type}"'):
-                return self.data_manager.select_dict('IMPLANTS_MELEE', filter=f'implant_id = "{self.implant_type}"')[0].get('id')
-
+        if self._implant:
+            attack = self.data_manager.select_dict('IMPLANTS_MELEE', filter=f'implant_id = "{self._implant.type.implant_type_id}"')
+            if not attack:
+                return None
+            else:
+                return attack[0].get('id')
 
         if self.data_manager.check('RACES_MELEE', f'part_id = "{self.element_id}"'):
             return self.data_manager.select_dict('RACES_MELEE', filter=f'part_id = "{self.element_id}"')[0].get('id')
@@ -676,7 +1198,7 @@ class BodyElement(BodyPart):
         self.data_manager.delete('CHARS_INJURY', f'id = {self.character_id} AND place = "{self.element_id}"')
 
     def __repr__(self):
-        return f'BodyElement.{self.character_id}.{self.element_id}' + f'{f" {self.implant_type.implant_type_id}" if self.implant_type else ""}'
+        return f'BodyElement.{self.character_id}.{self.element_id}' + f'{f" {self._implant.type.implant_type_id}" if self._implant else ""}'
 
     def __str__(self):
         wounds = Injury.get_character_injuries(self.character_id, data_manager=self.data_manager).get(self.element_id, [])
@@ -700,8 +1222,58 @@ class BodyElement(BodyPart):
 class Body:
     def __init__(self, character_id:int, **kwargs):
         self.character_id = character_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        self.race = self.get_character_race()
+        self.data_manager = kwargs.get('data_manager', DEFAULT_MANAGER)
+
+        self._body_elements = []
+        self._injuries = []
+        self._diseases = []
+        self._pain = None
+        self._bleed = None
+        self._race_id = None
+        self._race = None
+
+    @property
+    def body_elements(self):
+        if not self._body_elements:
+            self._body_elements = self.get_body_elements()
+        return self._body_elements
+
+    @property
+    def injuries(self):
+        if not self._injuries:
+            self._injuries = self.fetch_all_injuries()
+        return self._injuries
+
+    @property
+    def diseases(self):
+        if not self._diseases:
+            self._diseases = self.fetch_all_diseases()
+        return self._diseases
+
+    @property
+    def pain(self):
+        if self._pain is None:
+            self._pain = self.calculate_pain()
+        return self._pain
+
+    @property
+    def bleed(self):
+        if self._bleed is None:
+            self._bleed = self.calculate_bleeding()
+        return self._bleed
+
+    @property
+    def race(self):
+        if not self._race_id:
+            self._race_id = self.get_character_race()
+        return self._race_id
+
+    @property
+    def character_race(self):
+        if not self._race:
+            self._race = Race(self.race, data_manager=self.data_manager)
+
+        return self._race
 
     def get_character_race(self) -> str | None:
         if self.data_manager.check('CHARS_INIT', f'id = {self.character_id}'):
@@ -713,7 +1285,7 @@ class Body:
         if not self.race:
             return []
 
-        race = Race(self.race, data_manager=self.data_manager)
+        race = self.character_race
         return race.fetch_bodyparts()
 
     def get_body_elements(self):
@@ -724,34 +1296,38 @@ class Body:
         if self.data_manager.check('CHARS_BODY', f'id = {self.character_id}'):
             implants = self.data_manager.select_dict('CHARS_BODY', filter=f'id = {self.character_id}')
             for implant in implants:
-                if not ImplantType(implant.get('type'), data_manager=self.data_manager).is_replacing or not implant.get('place'):
-                    imp_element = BodyElement(self.character_id, implant.get('imp_id'), data_manager=self.data_manager)
-                    imp_element.set_group(BodyPart(imp_element.parent_part).body_parts_group)
-                    elements.append(imp_element)
+                # if not ImplantType(implant.get('type'), data_manager=self.data_manager).is_replacing or not implant.get('place'):
+                #     imp_element = BodyElement(self.character_id, implant.get('imp_id'), data_manager=self.data_manager)
+                #     imp_element.set_group(BodyPart(imp_element.parent_part).body_parts_group)
+                #     elements.append(imp_element)
+                implant_type = ImplantType(implant.get('type'), data_manager=self.data_manager)
+                if not implant_type.is_replacing:
+                    elements.append(BodyElement(character_id=self.character_id, element_id=implant.get('imp_id'), data_manager=self.data_manager))
+
+        pprint.pprint(elements)
 
         return elements
 
     def fetch_all_injuries(self):
         return Injury.get_character_injuries(self.character_id, data_manager=self.data_manager)
 
-    def fetch_all_diseases(self):
+    def fetch_all_diseases(self) -> dict[str, list[Disease]]:
         return Disease.get_character_diseases(self.character_id, data_manager=self.data_manager)
 
     def calculate_pain(self):
-        injuries = self.fetch_all_injuries()
-        diseases = self.fetch_all_diseases()
-        race = Race(self.race, data_manager=self.data_manager)
+        injuries = self.injuries
+        diseases = self.diseases
+        race = self.character_race
 
         total_pain = 0
         for key in injuries:
             body_element = BodyElement(self.character_id, key, data_manager=self.data_manager)
             body_part_pain_factor = body_element.pain_factor
             if body_element.calculate_health() <= 0:
-                total_pain += 5 * body_part_pain_factor
+                total_pain += 20 * body_part_pain_factor
                 continue
 
             for injury in injuries[key]:
-                print(injury.calculate_pain(), body_part_pain_factor)
                 total_pain += injury.calculate_pain() * body_part_pain_factor
 
         for key in diseases:
@@ -761,7 +1337,7 @@ class Body:
         return (total_pain / race.pain_limit) * race.pain_factor * 100
 
     def calculate_bleeding(self):
-        injuries = self.fetch_all_injuries()
+        injuries = self.injuries
         total_bleeding = 0
 
         blood_pumping = self.get_capacity('BloodPumping')
@@ -769,13 +1345,13 @@ class Body:
         for key in injuries:
             for injury in injuries[key]:
                 body_element = injury.get_body_element()
-                total_bleeding += injury.injury_type.bleeding if injury.healing_efficiency <= 0 and not body_element.implant_type and not body_element.calculate_health() <= 0 else 0
+                total_bleeding += injury.injury_type.bleeding if injury.healing_efficiency <= 0 and not body_element.implant and not body_element.calculate_health() <= 0 and not injury.is_scar else 0
 
         return total_bleeding - blood_pumping
 
     def calculate_capacities(self):
         total_capacities = {}
-        for limb in self.get_body_elements():
+        for limb in self.body_elements:
             if limb.capacity is None:
                 continue
 
@@ -792,6 +1368,14 @@ class Body:
                     if cap not in affects:
                         affects[cap] = 0
                     affects[cap] += capacity_affect[cap]
+
+        full_body_diseases = self.diseases
+        print(total_capacities)
+        print(full_body_diseases.get('Все тело', []))
+        for dis in full_body_diseases.get('Все тело', []):
+            if dis.disease_type.capacity:
+                print(total_capacities[dis.disease_type.capacity], dis.disease_type.capacity_offset * dis.current_severity)
+                total_capacities[dis.disease_type.capacity] += dis.disease_type.capacity_offset * dis.current_severity
 
         for capacity in total_capacities:
             if capacity not in affects:
@@ -810,13 +1394,15 @@ class Body:
         return total_capacities.get(capacity, 0)
 
     def choose_random_element(self):
-        main_element = BodyElement(self.character_id, Race(self.race, data_manager=self.data_manager).get_main_bodypart(), data_manager=self.data_manager)
+        main_element = BodyElement(self.character_id, self.character_race.get_main_bodypart(), data_manager=self.data_manager)
         return main_element.select_random_body_part()
 
     def get_available_clothes_slots(self):
-        elements = self.get_body_elements()
+        elements = self.body_elements
         total_list = []
         for element in elements:
+            if element.body_parts_group is None:
+                continue
             total_list.append(element.body_parts_group)
 
         return list(set(total_list))
@@ -829,7 +1415,7 @@ class Body:
             return None
 
     def bleeding(self, minutes:int):
-        total_bleed = self.calculate_bleeding()
+        total_bleed = self.bleed
         blood_lost_per_minute = round(total_bleed / 1440, 2)
 
         if blood_lost_per_minute == 0:
@@ -852,13 +1438,23 @@ class Body:
         return self.get_available_clothes_slots()
 
     def get_bodyparts_in_group(self, body_parts_group: str):
-        total_elemets = self.get_body_elements()
+        total_elemets = self.body_elements
         total_list = []
         for element in total_elemets:
             if element.body_parts_group == body_parts_group and not element.is_internal:
                 total_list.append(element)
 
         return total_list
+
+    def get_main_group(self):
+        main_element = BodyElement(self.character_id,
+                                   self.character_race.get_main_bodypart(),
+                                   data_manager=self.data_manager)
+        return main_element.body_parts_group
+
+    def get_main_part(self):
+        main_element = BodyElement(self.character_id, self.race.get_main_bodypart(), data_manager=self.data_manager)
+        return main_element
 
     def choose_random_element_from_group(self, body_parts_group: str):
         parts_in_group = self.get_bodyparts_in_group(body_parts_group)
@@ -867,8 +1463,8 @@ class Body:
         main_part: BodyElement = random.choice(parts_in_group)
         return main_part.select_random_body_part()
 
-    def get_race_attacks(self):
-        body_parts_health = {element: element.calculate_health() for element in self.get_body_elements()}
+    def get_race_attacks(self) -> list[str]:
+        body_parts_health = {element: element.calculate_health() for element in self.body_elements}
         total_attacks = []
         for element in body_parts_health:
             if body_parts_health[element] <= 0:
@@ -890,7 +1486,9 @@ class Body:
         return total_text
 
     def string_pain(self):
-        pain = self.calculate_pain()
+        pain = self.pain
+        if pain < 0:
+            pain = 0
 
         pain_label = 'Отсутствует'
 
@@ -910,25 +1508,28 @@ class Body:
         return f'*Ощущаемая боль:* ***{pain_label} ({pain:.2f}%)***'
 
     def string_bleeding(self):
-        bleeding = self.calculate_bleeding()
-        return f'*Кровотечение:* ***{bleeding:.2f}%***' if bleeding > 0 else '*Кровотечение:* ***Отсутствует***'
+        bleeding = self.bleed
+        hours_to_bleedout = round(2400 / bleeding, 2) if bleeding > 0 else 10000
+        minutes_to_bleedout = round((hours_to_bleedout - int(hours_to_bleedout)) * 60)
+
+        return f'*Кровотечение:* ***{bleeding:.1f}%*** ({int(hours_to_bleedout)} ч. {minutes_to_bleedout} мин. до смерти)' if bleeding > 0 else '*Кровотечение:* ***Отсутствует***'
 
     def string_vital_status(self):
         vital_effects = []
         is_dead = self.is_dead()
 
-        if is_dead[0]:
-            vital_effects.append('Мертв')
-        else:
-            vital_effects.extend(self.capacity_vital_offset()[1])
+        # if is_dead[0]:
+        #     vital_effects.append('Мертв')
+
+        vital_effects.extend(is_dead[1])
 
 
-        return f'*Осложнения:' + f" **{','.join(vital_effects)}***" if vital_effects else f'*Осложнения: **Отсутствуют***'
+        return f'*Осложнения:' + f" **{', '.join(vital_effects)}***" if vital_effects else f'*Осложнения: **Отсутствуют***'
 
     def string_hediff(self):
-        body_elements = self.get_body_elements()
-        injuries = self.fetch_all_injuries()
-        diseases = self.fetch_all_diseases()
+        body_elements = self.body_elements
+        injuries = self.injuries
+        diseases = self.diseases
 
         text = ''
 
@@ -945,8 +1546,6 @@ class Body:
 
             text += body_text
 
-
-
         elements = [str(element) for element in body_elements if element.element_id in injuries or element.element_id in diseases]
 
         for element in elements:
@@ -955,8 +1554,7 @@ class Body:
         return text
 
     def string_bodyparts(self):
-        elements = self.get_body_elements()
-        print(elements)
+        elements = self.body_elements
         body_groups = {}
         total_text = ''
 
@@ -967,12 +1565,12 @@ class Body:
             body_groups[element.body_parts_group].append(element_text)
 
         for group, parts in body_groups.items():
-            total_text += f'-# [ {group} ]:\n' + ''.join(parts) + '\n'  # '\n' for clearer output
+            total_text += f'-# [ {group if group else "Другое"} ]:\n' + ''.join(parts) + '\n'  # '\n' for clearer output
 
         return total_text
 
     def elements_vital_offset(self):
-        elements = self.get_body_elements()
+        elements = self.body_elements
         total_vital = 100
         for element in elements:
             total_vital -= element.vital_offset()
@@ -986,67 +1584,84 @@ class Body:
         for capacity in capacities:
             cap = CapacityType(capacity, data_manager=self.data_manager)
             if capacities[capacity] < 100:
-                total_vital -= cap.mortality * (100 - capacities[capacity])
+                total_vital -= (cap.mortality/100) * (100 - capacities[capacity])
+                print(cap.label, cap.mortality, capacities[capacity], total_vital)
 
             if capacities[capacity] <= cap.critical_value:
                 vital_effects.append(cap.critical_effect)
+
+        print(capacities, total_vital)
 
         return total_vital if total_vital >= 0 else 0, vital_effects
 
     def diseases_vital_offset(self):
         diseases = []
-        total_diseases = self.fetch_all_diseases()
+        total_diseases = self.diseases
         for slot in total_diseases:
             diseases.extend(total_diseases[slot])
 
-        total_vital = 100
+        total_vital = 0
         for disease in diseases:
             if disease.current_severity > 0 and disease.disease_type.mortality:
-                total_vital = disease.current_severity if disease.current_severity < total_vital else total_vital
+                total_vital = disease.current_severity if disease.current_severity > total_vital else total_vital
 
         return total_vital if total_vital >= 0 else 0
 
     def is_dead(self) -> tuple[bool, list]:
         capacities_vital, capacities_effects = self.capacity_vital_offset()
         elements_vital = self.elements_vital_offset()
-        diseases_vital = self.diseases_vital_offset()
-        pain = self.calculate_pain()
+        diseases_vital = 100 - self.diseases_vital_offset()
+        pain = self.pain
 
         if pain > 100:
             capacities_effects.append('Болевой шок')
 
-        print(self.character_id, elements_vital, capacities_vital, diseases_vital)
+        print('ПОЧЕМУ УМЕР', self.character_id, elements_vital, capacities_vital, diseases_vital)
+        print(f'УМЕРШИЙ: {self.character_id}\n'
+              f'СНИЖЕНИЕ ОТ ЭЛЕМЕНТОВ: {elements_vital}\n'
+              f'СНИЖЕНИЕ ОТ ФИЗ ПОКАЗАТЕЛЕЙ: {capacities_vital}\n'
+              f'СНИЖЕНИЕ ОТ БОЛЕЗНЕЙ: {diseases_vital}')
 
         if min(elements_vital, capacities_vital, diseases_vital) > 0 and 'Кома' not in capacities_effects and 'Болевой шок' not in capacities_effects:
             return False, capacities_effects
         else:
+            if elements_vital == 0 or diseases_vital == 0:
+                return True, ['Мертв']
             return True, capacities_effects
 
     def vital_damage(self) -> float:
         capacities_vital, capacities_effects = self.capacity_vital_offset()
         elements_vital = self.elements_vital_offset()
-        diseases_vital = self.diseases_vital_offset()
+        diseases_vital = 100 - self.diseases_vital_offset()
 
         return min(elements_vital, capacities_vital, diseases_vital)
 
     def get_injuries_list(self) -> list:
-        injuries_dict = self.fetch_all_injuries()
+        injuries_dict = self.injuries
         injuries = [item for sublist in injuries_dict.values() for item in sublist]
         return injuries
 
     def get_diseases_list(self) -> list:
-        diseases_dict = self.fetch_all_diseases()
+        diseases_dict = self.diseases
         diseases = [item for sublist in diseases_dict.values() for item in sublist]
         return diseases
 
     def rest(self, healing_rate:int=0):
+        filtration = self.get_capacity('BloodFiltration')
+
         injuries: list[Injury] = self.get_injuries_list()
         diseases: list[Disease] = self.get_diseases_list()
 
         for disease in diseases:
-            if disease.healing_efficiency < healing_rate:
+            if disease.healing_efficiency < healing_rate and disease.disease_type.can_be_treated:
                 disease.set_healing(healing_rate)
-            disease.update()
+            disease.update(filtration)
+
+        if self.get_bleedout():
+            total_bleed = self.get_bleedout()
+            self.bleeding(1440)
+            if total_bleed.current_severity <= 0:
+                total_bleed.delete_disease(total_bleed.disease_id)
 
         for injury in injuries:
             place = injury.place
@@ -1058,8 +1673,7 @@ class Body:
 
             if injury.healing_efficiency < healing_rate:
                 injury.set_healing(healing_rate)
-            injury.update()
-
+            injury.update(filtration)
 
 
 # class BodyPart:

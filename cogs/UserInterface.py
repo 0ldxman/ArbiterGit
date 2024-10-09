@@ -6,11 +6,11 @@ import random
 import discord
 from discord.ext import commands
 from discord import default_permissions
-from ArbDatabase import DataManager
+from ArbDatabase import DEFAULT_MANAGER, DataManager
 from ArbUIUX import ArbEmbed, HealthEmbed, Paginator, SuccessEmbed, ErrorEmbed, InteractiveForm, FormStep, Selection, SelectingForm
 from ArbResponse import Response, ResponsePool, RespondIcon, RespondLog, Notification
 
-from .BasicCog import BasicCog
+from cogs.BasicCog import BasicCog
 
 from ArbAutocomplete import ArbAutoComplete, AAC
 from typing import Callable
@@ -24,6 +24,7 @@ from ArbItems import Inventory, Item, CharacterEquipment
 from ArbBattle import Actor, Coordinator, Battlefield, BattleTeam, Layer, GameObject, ActionManager
 from ArbDialogues import Dialogue, CharacterMessage
 from ArbCore import Server, Player, Review
+from ArbOrgs import Organization
 
 
 class CharacterMenu(BasicCog):
@@ -32,33 +33,47 @@ class CharacterMenu(BasicCog):
     character = discord.SlashCommandGroup("персонаж", 'Команды интерфейса персонажа')
     char_info = character.create_subgroup('сведения', 'Информация о персонаже')
     char_mgr = character.create_subgroup('управление', 'Управление персонажами')
+    char_rels = character.create_subgroup('отношение', 'Отношения персонажа')
     player = discord.SlashCommandGroup("игрок")
     player_info = player.create_subgroup('сведения', 'Информация о пользователе')
     player_reg = player.create_subgroup('анкета', 'Информация о регистрации')
     player_rev = player.create_subgroup('отзывы', 'Информация об отзывах')
+    char_rp = character.create_subgroup('отыгрыш', 'Команды рп-отыгрыша')
 
     async def tables_list(self):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return db.get_all_tables()
 
     async def columns_list(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         table_name = ctx.options['table']
         return db.get_all_columns(table_name)
 
     async def get_columns_types(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         table_name = ctx.options['table']
         return db.get_columns_types(table_name)
 
-    @character.command(name='сменить-имя')
+    async def get_character_relations(ctx: discord.AutocompleteContext):
+        from ArbCharacterMemory import CharacterRelations
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id, data_manager=DEFAULT_MANAGER).current_character
+        print(character)
+
+        relations = CharacterRelations(character, data_manager=db)
+        return [f'{encounter_id} - {relation.relation_type.label if not relation.family_type else relation.relation_type.label} {Character(encounter_id).name}' for encounter_id, relation in relations.relations.items()]
+
+
+    @character.command(name='сменить-имя', description="Меняет имя текущего персонажа")
     @BasicCog.character_required
     async def __change_name(self, ctx: discord.ApplicationContext,
-                           new_name: discord.Option(str, required=True, min_length=1, max_length=100),
+                            new_name: discord.Option(str, required=True, min_length=1, max_length=100),
                             character_id: int=None):
 
-        character = Character(character_id)
-        character.update_record({'name': new_name})
+        character = Character(character_id, data_manager=DEFAULT_MANAGER)
         character.name = new_name
 
         embed = SuccessEmbed('Имя персонажа изменено',
@@ -68,14 +83,13 @@ class CharacterMenu(BasicCog):
                              footer_logo=ctx.author.avatar)
         await ctx.respond(embed=embed)
 
-    @character.command(name='сменить-картинку')
+    @character.command(name='сменить-картинку', description="Меняет внешность (картинку) текущего персонажа")
     @BasicCog.character_required
     async def __change_avatar(self, ctx: discord.ApplicationContext,
-                           new_avatar: discord.Option(discord.SlashCommandOptionType.attachment, required=True),
+                           new_avatar: discord.Option(str, required=True),
                            character_id: int=None):
         character = Character(character_id)
-        character.update_record({'avatar': str(new_avatar.url)})
-        character.picture = new_avatar.url
+        character.picture = new_avatar
 
         embed = SuccessEmbed('Аватарка персонажа изменена',
                              f'*{ctx.author.mention} изменил внешность персонажа **{character.name} ||({character_id})||***',
@@ -85,7 +99,7 @@ class CharacterMenu(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @character.command(name='сменить-позывной')
+    @character.command(name='сменить-позывной', description="Меняет позывной текущего персонажа (если он не состоит в организации или имеет полномочия)")
     @BasicCog.character_required
     async def __change_nickname(self, ctx: discord.ApplicationContext,
                            callsign: discord.Option(str, required=True, min_length=1, max_length=100),
@@ -94,7 +108,7 @@ class CharacterMenu(BasicCog):
 
         character = Character(character_id)
         if not character.org:
-            character.update_record({'callsign': callsign})
+            character.callsign = callsign
 
             embed = SuccessEmbed('Позывной персонажа изменен',
                                  f'*{ctx.author.mention} изменил позывной персонажа **{character.name}** ||({character_id})|| на **"{callsign}"***',
@@ -116,7 +130,7 @@ class CharacterMenu(BasicCog):
             await ctx.respond(embed=embed)
             return
 
-        character.update_record({'callsign': callsign})
+        character.callsign = callsign
 
         embed = SuccessEmbed('Позывной персонажа изменен',
                              f'*{ctx.author.mention} изменил позывной персонажа **{character.name}** ||({character_id})|| на **"{callsign}"***',
@@ -127,7 +141,7 @@ class CharacterMenu(BasicCog):
         return
 
 
-    @character.command(name='сказать')
+    @character.command(name='сказать', description="Сказать фразу от лица персонажа")
     @BasicCog.character_required
     async def __say_phrase(self, ctx: discord.ApplicationContext,
                            phrase: discord.Option(str, required=True, min_length=1, max_length=2000),
@@ -140,12 +154,19 @@ class CharacterMenu(BasicCog):
         if dialogue:
             message.save_to_db(dialogue.dialogue_id)
 
+        total_mentions = []
+        mentions = message.proccessed_data.mentions
+        for m in mentions:
+            total_mentions.append(f'<@{m}>')
+
+        total_mentions = ' '.join(total_mentions)
+
         command = await ctx.respond(f'-# Сообщение от **{Character(character_id).name}** отправлено', ephemeral=True)
 
-        await ctx.send('', embed=embed)
+        await ctx.send(total_mentions, embed=embed)
         await command.delete_original_response()
 
-    @character.command(name='кубик')
+    @character.command(name='кубик', description="Попытка совершить действий от лица персонажа. Пример формулы: d6+3d10-5")
     @BasicCog.character_required
     async def __dice_roll(self, ctx: discord.ApplicationContext,
                           formula: discord.Option(str, required=True, min_length=2),
@@ -157,7 +178,7 @@ class CharacterMenu(BasicCog):
         print(dice.get_result())
         await dice.output_results(ctx, character_id)
 
-    @character.command(name='проверка-навыка')
+    @character.command(name='проверка-навыка', description="Попытка совершить действие с проверкой навыка текущего персонажа")
     @BasicCog.character_required
     async def __skill_check(self, ctx: discord.ApplicationContext,
                            skill: discord.Option(str, required=True, autocomplete=discord.utils.basic_autocomplete(AAC.db_call('SKILL_INIT', 'label'))),
@@ -166,7 +187,7 @@ class CharacterMenu(BasicCog):
         from ArbSkills import Skill
 
         skill_id = AAC.extract('SKILL_INIT', 'label', skill, 'id')
-        skill_obj = Skill(character_id, skill_id)
+        skill_obj = Skill(character_id, skill_id, data_manager=DEFAULT_MANAGER)
 
         success, dice = skill_obj.skill_check(difficulty)
 
@@ -196,11 +217,11 @@ class CharacterMenu(BasicCog):
 
 
 
-    @character.command(name='персонаж-игрока')
+    @character.command(name='персонаж-игрока', description="Узнать какой у выбранного игрока текущий персонаж")
     async def __player_character(self, ctx, user: discord.Option(discord.SlashCommandOptionType.user, required=True)):
         from ArbCore import Player
 
-        player = Player(user.id)
+        player = Player(user.id, data_manager=DEFAULT_MANAGER)
         if not player.current_character:
             embed = ErrorEmbed('Персонаж отсутствует', f'*У игрока {user.mention} нет активного персонажа*')
             await ctx.respond('', embed=embed)
@@ -212,9 +233,9 @@ class CharacterMenu(BasicCog):
                          footer=character_info.name, footer_logo=character_info.picture)
         await ctx.respond('', embed=embed)
 
-    @character.command(name='владелец-персонажа')
+    @character.command(name='владелец-персонажа', description="Выводит владельца (игрока) персонажа")
     async def __character_player(self, ctx, character_id: discord.Option(int)):
-        player = DataManager().select_dict('CHARS_INIT', filter=f'id = {character_id}')
+        player = DEFAULT_MANAGER.select_dict('CHARS_INIT', filter=f'id = {character_id}')
         if player is None:
             embed = ErrorEmbed('Персонаж не найден', f'*Персонаж с ``id {character_id}`` не найден!*')
             await ctx.respond('', embed=embed)
@@ -231,7 +252,7 @@ class CharacterMenu(BasicCog):
                          footer=Character(character_id).name, footer_logo=Character(character_id).picture)
         await ctx.respond('', embed=embed)
 
-    @char_info.command(name='карточка-персонажа')
+    @char_info.command(name='карточка-персонажа', description="Основная информация о персонаже")
     @BasicCog.character_required
     async def __character_info(self, ctx, character_id: int = None):
         character_info = Character(character_id)
@@ -244,7 +265,7 @@ class CharacterMenu(BasicCog):
 
         await ctx.respond('', embed=embed)
 
-    @char_info.command(name='здоровье')
+    @char_info.command(name='здоровье', description="Состояние здоровья персонажа")
     @BasicCog.character_required
     async def __character_body(self, ctx, character_id: int=None):
 
@@ -255,13 +276,20 @@ class CharacterMenu(BasicCog):
         vital_damage = int(body.vital_damage())
         print(vital_damage)
 
-        capacities_embed = HealthEmbed('Самочувствие', total_text, vital_damage)
+        capacities_embed = HealthEmbed('Самочувствие', total_text, vital_damage,
+                                       footer=Character(character_id).name,
+                                       footer_logo=Character(character_id).picture)
 
         hediffs = body.string_hediff()
-        hediffs_embed = HealthEmbed('Ранения и заболевания', hediffs if hediffs else f'-# *(Здесь будут отображаться ваши ранения и болезни)*', vital_damage)
+        hediffs_embed = HealthEmbed('Ранения и заболевания', hediffs if hediffs else f'-# *(Здесь будут отображаться ваши ранения и болезни)*', vital_damage,
+                                    footer=Character(character_id).name,
+                                    footer_logo=Character(character_id).picture
+                                    )
 
         body_elements = body.string_bodyparts()
-        body_elements_embed = HealthEmbed('Части тела', body_elements if body_elements else f'-# *(Здесь будут отображаться ваши части тела)*', vital_damage)
+        body_elements_embed = HealthEmbed('Части тела', body_elements if body_elements else f'-# *(Здесь будут отображаться ваши части тела)*', vital_damage,
+                                          footer=Character(character_id).name,
+                                          footer_logo=Character(character_id).picture)
 
         total_embeds = [capacities_embed, hediffs_embed, body_elements_embed]
 
@@ -270,7 +298,7 @@ class CharacterMenu(BasicCog):
         await view.update_button()
         await ctx.respond(embed=total_embeds[0], view=view)
 
-    @character.command(name=f'инвентарь')
+    @character.command(name=f'инвентарь', description="Экипировка и предметы инвентаря персонажа")
     @BasicCog.character_required
     async def __character_inventory(self, ctx, character_id: int=None):
 
@@ -292,7 +320,7 @@ class CharacterMenu(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @char_info.command(name='отношения')
+    @char_info.command(name='отношения', description="Показывает отношения текущего персонажа с другими знакомыми персонажами")
     @BasicCog.character_required
     async def __character_relations(self, ctx, character_id: int=None):
 
@@ -314,7 +342,7 @@ class CharacterMenu(BasicCog):
         await view.update_button()
         await ctx.respond(embed=total_embeds[0], view=view)
 
-    @char_info.command(name='воспоминания')
+    @char_info.command(name='воспоминания', description="Узнать активные воспоминания персонажа")
     @BasicCog.character_required
     async def __character_memories(self, ctx, character_id: int = None):
 
@@ -336,7 +364,7 @@ class CharacterMenu(BasicCog):
         await view.update_button()
         await ctx.respond(embed=total_embeds[0], view=view)
 
-    @char_info.command(name='психология')
+    @char_info.command(name='психология', description="Узнать мировоззрение и уровень стресса персонажа")
     @BasicCog.character_required
     async def __character_psychology(self, ctx, character_id: int = None):
         from ArbPsychology import CharacterPsychology, CharacterMood
@@ -353,7 +381,7 @@ class CharacterMenu(BasicCog):
         await ctx.respond('', embed=embed)
 
 
-    @generate.command(name='случайное-имя')
+    @generate.command(name='случайное-имя', description="Сгенерировать случайное имя персонажа")
     async def __generate_name(self, ctx, gender: discord.Option(str, choices=['Мужской', 'Женский', 'Бесполый', 'Робот']),
                               value: discord.Option(int, required=False, default=1)):
         total_names = ''
@@ -363,7 +391,7 @@ class CharacterMenu(BasicCog):
         embed = ArbEmbed('Сгенерированные имена', total_names)
         await ctx.respond(f'', embed=embed)
 
-    @generate.command(name='случайное-название')
+    @generate.command(name='случайное-название', description="Сгенерировать случайное название")
     async def __generate_title(self, ctx,
                               type: discord.Option(str, choices=['Страна', 'Планета', 'Организация', 'Город', 'Планета', 'Система']),
                               value: discord.Option(int, required=False, default=1)):
@@ -388,9 +416,17 @@ class CharacterMenu(BasicCog):
             if character_id:
                 char_message = CharacterMessage(character_id, message.content)
                 char_message.save_to_db(dialogue.dialogue_id)
+
+                total_mentions = []
+                mentions = char_message.proccessed_data.mentions
+                for m in mentions:
+                    total_mentions.append(f'<@{m}>')
+
+                total_mentions = ' '.join(total_mentions)
+
                 embed = char_message.get_embed()
                 await message.delete()
-                await ctx.send(embed=embed)
+                await ctx.send(total_mentions, embed=embed)
 
     # @commands.slash_command(name=f'database_edit')
     # @BasicCog.admin_required
@@ -400,7 +436,7 @@ class CharacterMenu(BasicCog):
     #                         value,
     #                         filter: discord.Option(str)):
     #
-    #     data_manager = DataManager()
+    #     data_manager = DEFAULT_MANAGER
     #     try:
     #         rows = data_manager.select_dict(table, filter=filter)
     #         rows_count = len(rows)
@@ -425,7 +461,7 @@ class CharacterMenu(BasicCog):
     #                         filter: discord.Option(str, required=False),
     #                         page: discord.Option(int, required=False)):
     #
-    #     data_manager = DataManager()
+    #     data_manager = DEFAULT_MANAGER
     #     rows = data_manager.select_dict(table, filter=filter)
     #     rows_text = []
     #     for row in rows:
@@ -445,7 +481,7 @@ class CharacterMenu(BasicCog):
     #     view = Paginator(embeds, ctx, ignore_footer=True)
     #     await ctx.respond(view=view, embed=embeds[page-1 if page and page <= len(embeds) else 0])
 
-    @player_info.command(name='карточка-игрока')
+    @player_info.command(name='карточка-игрока', description="Узнать информацию и рейтинг игрока")
     async def __player_card(self, ctx, player_id: discord.Option(discord.SlashCommandOptionType.user, required=False)):
         from ArbCore import Player
 
@@ -454,7 +490,7 @@ class CharacterMenu(BasicCog):
 
         await Player(player_id.id).player_card(ctx)
 
-    @player_rev.command(name='написать-отзыв')
+    @player_rev.command(name='написать-отзыв', description="Написать отзыв на другого игрока")
     async def __review(self, ctx,
                        player: discord.Option(discord.SlashCommandOptionType.user),
                        raiting: discord.Option(int, min_value=1, max_value=5, required=True),
@@ -472,7 +508,7 @@ class CharacterMenu(BasicCog):
         embed = review.to_embed(ctx)
         await ctx.respond('', embed=embed)
 
-    @player_rev.command(name='мои-отзывы')
+    @player_rev.command(name='мои-отзывы', description="Узнать отзывы других игроков о вас")
     async def __my_reviews(self, ctx,
                            player_id: discord.Option(discord.SlashCommandOptionType.user, required=False)):
         from ArbCore import Review
@@ -481,12 +517,16 @@ class CharacterMenu(BasicCog):
             player_id = ctx.author
 
         reviews = Review.get_all_player_reviews(player_id.id)
+        if not reviews:
+            embed = ArbEmbed('Отзывы не найдены', '-# *У этого пользователя ещё нет отзывов*')
+            await ctx.respond('', embed=embed)
+            return
         embeds = [embed.to_embed(ctx) for embed in reviews]
         view = Paginator(embeds, ctx)
 
         await ctx.respond('', view=view, embed=embeds[0])
 
-    @player.command(name='рп-запрос')
+    @player.command(name='рп-запрос', description="Запрос администрации сервера на планирование и отыгрывание рп-ситуаций")
     async def __rp_request(self, ctx,
                                type: discord.Option(str, choices=['Личный', 'Фракционный', 'Дополнительный', 'Диалоговый', 'Организационный'], required=True),
                                title: discord.Option(str, required=False),
@@ -513,7 +553,7 @@ class CharacterMenu(BasicCog):
         await ctx.respond('', embed=embed)
         await ctx.author.send('', embed=dm_embed)
 
-    @player_info.command(name='мои-персонажи')
+    @player_info.command(name='мои-персонажи', description="Список доступных вам персонажей")
     async def __my_characters(self, ctx):
         from ArbCore import Player
         from ArbCharacters import Character
@@ -531,30 +571,49 @@ class CharacterMenu(BasicCog):
 
         await ctx.respond('', embed=embed)
 
-    @char_mgr.command(name='сменить-персонажа')
-    async def __switch_character(self, ctx, character_id:int):
+    @char_mgr.command(name='сменить-персонажа', description="Сменить активного персонажа")
+    async def __switch_character(self, ctx: discord.ApplicationContext, character_id:int):
         from ArbCore import Player
         from ArbCharacters import Character
+        from ArbOrgs import Organization
+        db = DEFAULT_MANAGER
         is_admin = self.is_admin_or_moderator(ctx)
-
-        available_characters = Player(ctx.author.id).get_characters_list()
-        print(available_characters)
+        player = Player(ctx.author.id, data_manager=db)
+        available_characters = player.get_characters_list()
         if character_id not in available_characters:
             if not is_admin:
                 embed = ErrorEmbed('Неверный ID персонажа', '-# Персонаж с данным ID вам не принадлежит!')
                 await ctx.respond(embed=embed)
                 return
             else:
-                Player(ctx.author.id).switch_character(character_id)
+                Player(ctx.author.id, data_manager=db).switch_character(character_id)
                 embed = SuccessEmbed(f'Контроль над персонажем {Character(character_id).name}', f'-# *Вы успешно взяли под личный контроль персонажа ||**{Character(character_id).__str__()}**||*')
                 await ctx.respond(embed=embed)
                 return
         else:
-            Player(ctx.author.id).switch_character(character_id)
+            if not is_admin:
+                total_roles = {r.name: r for r in ctx.guild.roles}
+
+                old_char_org_id = Character(player.current_character, data_manager=db).org if player.current_character else None
+                new_char_org_id = Character(character_id, data_manager=db).org
+                old_org = Organization(old_char_org_id, data_manager=db).label if old_char_org_id else 'Независимые'
+                if old_org not in total_roles:
+                    old_org = 'Независимые'
+                new_org = Organization(new_char_org_id, data_manager=db).label if new_char_org_id else 'Независимые'
+                if new_org not in total_roles:
+                    new_org = 'Независимые'
+
+                if old_org in total_roles:
+                    await ctx.author.remove_roles(total_roles.get(old_org))
+                if new_org in total_roles:
+                    await ctx.author.add_roles(total_roles.get(new_org))
+
+            player.switch_character(character_id)
+
             embed = SuccessEmbed(f'Контроль над персонажем {Character(character_id).name}', f'-# *Вы успешно взяли под личный контроль персонажа ||**{Character(character_id).__str__()}**||*')
             await ctx.respond(embed=embed)
 
-    @char_mgr.command(name='бросить-персонажа')
+    @char_mgr.command(name='бросить-персонажа', description="Бросить одного из ваших персонажей (персонаж становится НПС)")
     async def __leave_my_character(self, ctx, character_id:int):
         from ArbCore import Player
         from ArbCharacters import Character
@@ -578,19 +637,22 @@ class CharacterMenu(BasicCog):
                                  f'-# *Вы потеряли контроль над персонажем ||**{Character(character_id).__str__()}**||*')
             await ctx.respond(embed=embed)
 
-    @char_mgr.command(name='передать-персонажа')
+    @char_mgr.command(name='передать-персонажа', description="Позволяет передать персонажа другому игроку")
     async def __transfer_character(self, ctx, character_id:int,
                                    new_owner: discord.Option(discord.SlashCommandOptionType.user, required=True)):
         from ArbCore import Player
         from ArbCharacters import Character
 
-        is_admin = self.is_admin_or_moderator(ctx)
-        available_characters = Player(ctx.author.id).get_characters_list()
+        db = DEFAULT_MANAGER
 
-        character = Character(character_id)
+        is_admin = self.is_admin_or_moderator(ctx)
+        available_characters = Player(ctx.author.id, data_manager=db).get_characters_list()
+
+        character = Character(character_id, data_manager=db)
 
         if character_id not in available_characters:
             if not is_admin:
+                print('тут')
                 embed = ErrorEmbed('Неверный ID персонажа', '-# Персонаж с данным ID вам не принадлежит!')
                 await ctx.respond(embed=embed)
                 return
@@ -600,8 +662,14 @@ class CharacterMenu(BasicCog):
                                      f'-# *Игрок {ctx.author.mention} передал контроль над персонажем ||**{character.__str__()}**|| пользователю {new_owner.mention}*')
                 await ctx.respond(embed=embed)
                 return
+        else:
+            character.set_owner(new_owner.id)
+            embed = SuccessEmbed(f'{ctx.author.display_name} передал контроль над персонажем',
+                                 f'-# *Игрок {ctx.author.mention} передал контроль над персонажем ||**{character.__str__()}**|| пользователю {new_owner.mention}*')
+            await ctx.respond(embed=embed)
+            return
 
-    @commands.slash_command(name='отдохнуть')
+    @commands.slash_command(name='отдохнуть', description="Отдохните группой или в одиночку, наберитесь сил и залатайте раны")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     @BasicCog.is_group_leader_or_single
@@ -622,7 +690,7 @@ class CharacterMenu(BasicCog):
         if len(group_members) > 1:
             players_id = []
             for member in group_members:
-                player = DataManager().select_dict('CHARS_INIT', filter=f'id = {member}')
+                player = DEFAULT_MANAGER.select_dict('CHARS_INIT', filter=f'id = {member}')
                 if not player:
                     continue
                 owner_id = player[0].get('owner')
@@ -652,7 +720,7 @@ class CharacterMenu(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @commands.slash_command(name='бюджет')
+    @commands.slash_command(name='бюджет', description="Бюджет текущего персонажа")
     @BasicCog.character_required
     async def __budget(self, ctx, character_id:int=None):
         from ArbCharacters import Character
@@ -666,7 +734,7 @@ class CharacterMenu(BasicCog):
         embed.set_author(character.name, icon_url=character.picture)
         await ctx.respond(embed=embed)
 
-    @commands.slash_command(name='голосование-группы')
+    @commands.slash_command(name='голосование-группы', description="Запускает голосование типа Да/Нет для вашей группы")
     @BasicCog.character_required
     @BasicCog.is_group_leader_or_single
     async def __vote(self, ctx: discord.ApplicationContext,
@@ -680,7 +748,7 @@ class CharacterMenu(BasicCog):
 
         players_id = []
         for member in group_members:
-            player = DataManager().select_dict('CHARS_INIT', filter=f'id = {member}')
+            player = DEFAULT_MANAGER.select_dict('CHARS_INIT', filter=f'id = {member}')
             if not player:
                 continue
             owner_id = player[0].get('owner')
@@ -691,6 +759,226 @@ class CharacterMenu(BasicCog):
         vote = Vote(question, ['Да', 'Нет'], players_id, duration)
         result = await vote.start(ctx)
         print(result)
+
+    @char_rels.command(name='относится')
+    @BasicCog.character_required
+    async def __char_relate(self, ctx: discord.ApplicationContext,
+                            familiar: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations), required=True),
+                            trust: discord.Option(int, min_value=-100, max_value=100, required=False, default=0),
+                            sympathy: discord.Option(int, min_value=-100, max_value=100, required=False, default=0),
+                            respect: discord.Option(int, min_value=-100, max_value=100, required=False, default=0),
+                            love: discord.Option(int, min_value=-100, max_value=100, required=False, default=0),
+                            character_id: int=None):
+        from ArbCharacterMemory import CharacterRelations
+
+        encounter_id = BasicCog.prepare_id(familiar)
+
+        old_relation = CharacterRelations(character_id).get_relationship(encounter_id)
+
+        CharacterRelations.update_relations(character_id, encounter_id, trust, sympathy, respect, love)
+
+        new_relation = CharacterRelations(character_id).get_relationship(encounter_id)
+
+        old_avg_relation = old_relation.calculate_avg_relation()
+        new_avg_relation = new_relation.calculate_avg_relation()
+
+        if old_avg_relation < new_avg_relation:
+            embed = SuccessEmbed('Отношение улучшилось',
+                                 f'***{Character(character_id).name}** изменил отношения к **{Character(encounter_id).name}**, '
+                                 f'средний показатель отношений составил **{old_avg_relation}** -> **{new_avg_relation}***')
+            embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
+            await ctx.respond(embed=embed, ephemeral=True)
+
+            Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
+                                             f'{Character(character_id).name} улучшил своё отношение к {Character(encounter_id).name}',
+                                             character_id,
+                                             'success')
+
+            Notification.create_notification(f'Отношения с {Character(character_id).name}',
+                                             f'Отношения с {Character(character_id).name} улучшились', encounter_id,
+                                             'success')
+            await Notification.send_all_notifications(ctx)
+
+        elif old_avg_relation > new_avg_relation:
+            embed = ErrorEmbed('Отношения ухудшились',
+                               f'***{Character(character_id).name}** изменил отношение к **{Character(encounter_id).name}**, '
+                               f'средний показатель отношений составил **{old_avg_relation}** -> **{new_avg_relation}***')
+            embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
+            await ctx.respond(embed=embed, ephemeral=True)
+
+            Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
+                                             f'{Character(character_id).name} ухудшил своё отношение к {Character(encounter_id).name}',
+                                             character_id,
+                                             'danger')
+
+            Notification.create_notification(f'Отношения с {Character(character_id).name}',
+                                             f'Отношения с {Character(character_id).name} ухудшились', encounter_id,
+                                             'danger')
+            await Notification.send_all_notifications(ctx)
+
+        else:
+            embed = ArbEmbed('Отношения не изменились',
+                             f'***{Character(character_id).name}** изменил отношение к **{Character(encounter_id).name}**, '
+                             f'средний показатель отношений остался **{old_avg_relation}**')
+            embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
+            await ctx.respond(embed=embed, ephemeral=True)
+
+            Notification.create_notification(f'Отношения с {Character(encounter_id).name}',
+                                             f'{Character(character_id).name} изменил своё отношение к {Character(encounter_id).name}',
+                                             character_id,
+                                             'info')
+            Notification.create_notification(f'Отношения с {Character(character_id).name}',
+                                             f'Отношения с {Character(character_id).name} изменились...', encounter_id,
+                                             'info')
+            await Notification.send_all_notifications(ctx)
+
+    @char_rp.command(name='поцеловать')
+    @BasicCog.character_required
+    async def __kiss(self, ctx: discord.ApplicationContext,
+                            target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations), required=True),
+                            character_id: int=None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.kiss(ctx, target_id)
+
+    @char_rp.command(name='рукопожатие')
+    @BasicCog.character_required
+    async def __handshake(self, ctx: discord.ApplicationContext,
+                     target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations),
+                                            required=True),
+                     character_id: int = None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.handshake(ctx, target_id)
+
+    @char_rp.command(name='обнять')
+    @BasicCog.character_required
+    async def __hug(self, ctx: discord.ApplicationContext,
+                            target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(
+                                get_character_relations), required=True),
+                            character_id: int = None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.hug(ctx, target_id)
+
+    @char_rp.command(name='похлопать-по-плечу')
+    @BasicCog.character_required
+    async def __clap_on_shoulder(self, ctx: discord.ApplicationContext,
+                    target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(
+                        get_character_relations), required=True),
+                    character_id: int = None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.clap_on_shoulder(ctx, target_id)
+
+    @char_rp.command(name='воинское-приветствие')
+    @BasicCog.character_required
+    async def __salute(self, ctx: discord.ApplicationContext,
+                    target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(
+                        get_character_relations), required=True),
+                    character_id: int = None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.salute(ctx, target_id)
+
+    @char_rp.command(name='приветствие')
+    @BasicCog.character_required
+    async def __welcome(self, ctx: discord.ApplicationContext,
+                       target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(
+                           get_character_relations), required=True),
+                       character_id: int = None):
+
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.welcome(ctx, target_id)
+
+    @char_rp.command(name='пощёчина')
+    @BasicCog.character_required
+    async def __slap(self, ctx: discord.ApplicationContext,
+                     target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations), required=True),
+                     character_id: int = None):
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.slap(ctx, target_id)
+
+    @char_rp.command(name='показательный-удар')
+    @BasicCog.character_required
+    async def __punch(self, ctx: discord.ApplicationContext,
+                     target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations), required=True),
+                     character_id: int = None):
+        from ArbRolePlay import RPSystem
+
+        target_id = BasicCog.prepare_id(target)
+
+        rp = RPSystem(character_id)
+        await rp.punch(ctx, target_id)
+
+    @char_rp.command(name='камень-ножницы-бумага')
+    @BasicCog.character_required
+    async def __rock_paper_scissors(self, ctx: discord.ApplicationContext,
+                       target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_character_relations)),
+                       character_id: int = None):
+
+        from ArbCore import Player
+        from ArbUIUX import RPS, RPS_Player
+
+        author_character = Character(character_id)
+        target_character = Character(BasicCog.prepare_id(target))
+        target_owner = Player.get_owner_by_character_id(target_character.id)
+        if target_owner.player_id == ctx.bot.user.id:
+            target_owner = random.choice(Player.get_players_of_character(character_id))
+            if target_owner:
+                target_owner = target_owner.player_id
+        else:
+            target_owner = target_owner.player_id
+
+        player_1 = RPS_Player(author_character.id, author_character.name, ctx.author)
+        player_2 = RPS_Player(target_character.id, target_character.name, ctx.bot.get_user(target_owner))
+
+        if target == ctx.author:
+            await ctx.send("Вы не можете бросить вызов самому себе!")
+            return
+
+        game = RPS(player_1, player_2)
+        embed = ArbEmbed('Камень! Ножницы! Бумага!',
+                         f'**{author_character.name}** бросает вызов **{target_character.name}** в игре **"Камень-Ножницы-Бумага"**.\n\nКакой ход сделает ваш персонаж?')
+        embed.set_author(author_character.name, icon_url=author_character.picture)
+
+        start_embed = ArbEmbed('Камень! Ножницы! Бумага!',
+                               f'**{author_character.name}** бросает вызов **{target_character.name}** в игре **"Камень-Ножницы-Бумага"**!')
+        start_embed.set_author(author_character.name, icon_url=author_character.picture)
+
+        game.results_message = await ctx.respond(embed=start_embed)
+
+        await game.send_buttons(ctx, embed)
+
+
 
 
 class Registration(BasicCog):
@@ -719,7 +1007,7 @@ class Registration(BasicCog):
 
     async def author_forms(ctx: discord.AutocompleteContext):
         author = ctx.interaction.user.id
-        forms = DataManager().select_dict('REGISTRATION', filter=f'user_id = {author}')
+        forms = DEFAULT_MANAGER.select_dict('REGISTRATION', filter=f'user_id = {author}')
         choices = []
         for form in forms:
             character_name = json.loads(form.get('data')).get('name')
@@ -727,7 +1015,7 @@ class Registration(BasicCog):
 
         return choices
 
-    @reg.command(name='начать-регистрацию')
+    @reg.command(name='начать-регистрацию', description="Начинает регистрацию нового персонажа и автоматически отправляет анкету администрации")
     async def __start_registration(self, ctx):
         from ArbRegistration import CharacterRegistration
         from ArbCore import Player, Server
@@ -746,7 +1034,7 @@ class Registration(BasicCog):
         result = await character_registration.start()
         print(result)
 
-    @reg.command(name='создать-шаблон')
+    @reg.command(name='создать-шаблон', description="Позволяет создать шаблон для регистрации персонажа, который можно использовать при регистрации")
     async def __create_form(self, ctx,
                             race: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(AAC.db_call('RACES_INIT', 'name', 'primitive = 0 AND is_robot = 0'))),
                             organization: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(AAC.db_call('ORG_INIT', 'label'))),
@@ -777,7 +1065,7 @@ class Registration(BasicCog):
         callsign = f'\nПозывной: {callsign}' if callsign else ''
         picture_url = f'\nКартинка: {picture_url}' if picture_url else ''
         faction = f'\nФракция: {faction}' if faction else ''
-        worldview = worldview if worldview else random.choice(DataManager().select_dict('WORLDVIEW')).get('label')
+        worldview = worldview if worldview else random.choice(DEFAULT_MANAGER.select_dict('WORLDVIEW')).get('label')
 
         if not rank:
             org_id = AAC.extract('ORG_INIT', 'label', organization, 'id')
@@ -804,7 +1092,7 @@ class Registration(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @reg.command(name='мои-анкеты')
+    @reg.command(name='мои-анкеты', description="Позволяет посмотреть ваши активные анкеты и их статус рассмотрения")
     async def __my_forms(self, ctx: discord.ApplicationContext, player_id: discord.Option(discord.SlashCommandOptionType.user, required=False)):
         from ArbOrgs import Organization, Rank
         from ArbRaces import Race
@@ -812,7 +1100,7 @@ class Registration(BasicCog):
 
 
         player_id = player_id.id if player_id else ctx.author.id
-        db = DataManager()
+        db = DEFAULT_MANAGER
         forms = db.select_dict('REGISTRATION', filter=f'user_id = {player_id}')
         embeds = []
         for form in forms:
@@ -852,7 +1140,7 @@ class Registration(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @reg.command(name='удалить-анкету')
+    @reg.command(name='удалить-анкету', description="Удаляет анкету регистрации в случае если она заполнена неверно")
     async def __delete_my_form(self, ctx: discord.ApplicationContext,
                                form: discord.Option(str, autocomplete=author_forms)):
         from ArbUIUX import InviteView
@@ -883,9 +1171,9 @@ class Registration(BasicCog):
         result = await ctx.bot.wait_for('interaction')
 
         if result.custom_id == 'Accept':
-            DataManager().delete('REGISTRATION', f'form_id = {form_id}')
+            DEFAULT_MANAGER.delete('REGISTRATION', f'form_id = {form_id}')
 
-    @reg.command(name='отправить-биографию')
+    @reg.command(name='отправить-биографию', description="Позволяет прикрепить ссылку на сообщение или внешний документ с описанием биографии персонажа")
     async def __send_biography(self,
                                ctx: discord.ApplicationContext,
                                form: discord.Option(str, autocomplete=author_forms),
@@ -903,7 +1191,7 @@ class Registration(BasicCog):
                              footer=ctx.author.display_name,
                              footer_logo=ctx.author.avatar)
 
-        DataManager().update('REGISTRATION', {'bio': link}, f'form_id = {form_id}')
+        DEFAULT_MANAGER.update('REGISTRATION', {'bio': link}, f'form_id = {form_id}')
 
         await ctx.respond(embed=embed)
 
@@ -919,12 +1207,12 @@ class Registration(BasicCog):
 class CharacterQuests(BasicCog):
     quest = discord.SlashCommandGroup("задания", "Команды для работы с квестами")
 
-    @quest.command(name='мои-задания')
+    @quest.command(name='мои-задания', description="Узнать текущие задание персонажа и их статус")
     @BasicCog.character_required
     async def my_quests(self, ctx: discord.ApplicationContext, character_id:int=None):
         from ArbQuests import CharacterQuest
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         data = db.select_dict('CHARS_QUESTS', filter=f'id = {character_id}')
         character_quests = []
         for quest in data:
@@ -947,7 +1235,7 @@ class CharacterQuests(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @quest.command(name='задание')
+    @quest.command(name='задание', description="Узнать состояние выполняемого задания")
     @BasicCog.character_required
     async def current_quest(self, ctx: discord.ApplicationContext, character_id:int=None):
         from ArbQuests import QuestManager
@@ -992,8 +1280,10 @@ class CharacterCombat(BasicCog):
     cmb_info = combat.create_subgroup("сведения", 'Информация о бое')
     cmb_control = combat.create_subgroup("тактика", 'Команды боевых тактик')
 
+
+
     async def find_battle(self, character_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         battle_data = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {character_id}')
         if not battle_data:
             return None
@@ -1064,6 +1354,17 @@ class CharacterCombat(BasicCog):
         actor_melees = actor.status().melees
         return [f'{melee_id} - {Character(melee_id).name}' for melee_id in actor_melees]
 
+    async def get_melees(ctx: discord.AutocompleteContext):
+        from ArbCore import Player
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+
+        actor = Actor(character)
+        actor_melees = actor.status().melees
+        return [f'{melee_id} - {Character(melee_id).name}' for melee_id in actor_melees]
+
     async def ammo_type(ctx: discord.AutocompleteContext):
         from ArbCore import Player
         from ArbItems import CharacterEquipment
@@ -1080,7 +1381,90 @@ class CharacterCombat(BasicCog):
         print(weapon, weapon_caliber)
         return AAC.db_options('AMMO', 'name', f'caliber = "{weapon_caliber}"')
 
-    @cmb_info.command(name='моя-команда')
+    async def get_layers(ctx: discord.AutocompleteContext):
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+
+        actor = Actor(character, data_manager=db)
+        battle_id = actor.battle_id
+        current_layer = actor.layer_id
+
+        all_layers = db.select_dict('BATTLE_LAYERS', filter=f'battle_id = {battle_id} AND id != {current_layer}')
+
+        return [f'{layer_data.get("id")} - {layer_data.get("label")}' for layer_data in all_layers]
+
+    async def get_near_layers(ctx: discord.AutocompleteContext):
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+
+        actor = Actor(character, data_manager=db)
+        battle_id = actor.battle_id
+        current_layer = actor.layer_id
+
+        all_layers = db.select_dict('BATTLE_LAYERS', filter=f'battle_id = {battle_id}')
+
+        return [f'{layer_data.get("id")} - {layer_data.get("label")}' for layer_data in all_layers if layer_data.get("id") in [current_layer, current_layer + 1, current_layer - 1]]
+
+    async def get_objects(ctx: discord.AutocompleteContext):
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+
+        actor = Actor(character, data_manager=db)
+        battle_id = actor.battle_id
+        current_layer = actor.layer_id
+
+        all_objects = db.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {battle_id} AND layer_id = {current_layer}')
+        return [f'{object_data.get("object_id")} - {GameObject(object_data.get("object_id"), data_manager=db).object_type.label}' for object_data in all_objects]
+
+    async def get_all_objects(ctx: discord.AutocompleteContext):
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+
+        actor = Actor(character, data_manager=db)
+        battle_id = actor.battle_id
+
+        all_objects = db.select_dict('BATTLE_OBJECTS', filter=f'battle_id = {battle_id}')
+        return [f'{object_data.get("object_id")} - {GameObject(object_data.get("object_id"), data_manager=db).object_type.label}' for object_data in all_objects]
+
+    async def get_sounds(ctx: discord.AutocompleteContext):
+        from ArbBattle import ActorSounds
+        from ArbSounds import InBattleSound
+
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+        actor = Actor(character, data_manager=db)
+        actor_sounds = ActorSounds(actor)
+        sounds = actor_sounds.get_available_sounds()
+        return [f'{sound_id} - {InBattleSound(sound_id, data_manager=db).label}' for sound_id in sounds]
+
+    async def get_race_attacks(ctx: discord.AutocompleteContext):
+        from ArbWeapons import RaceAttack
+
+        db = DEFAULT_MANAGER
+
+        character = ctx.options.get('character_id')
+        if not character:
+            character = Player(ctx.interaction.user.id).current_character
+        actor = Actor(character, data_manager=db)
+        actor_attacks = actor.get_race_attacks()
+        return [f'{attack} - {RaceAttack(attack, data_manager=db).label}' for attack in actor_attacks]
+
+    @cmb_info.command(name='моя-команда', description="Моя команда в текущем бою")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __my_team(self, ctx, character_id:int=None):
@@ -1099,7 +1483,7 @@ class CharacterCombat(BasicCog):
         total_members = members + dead_members
         print(total_members)
 
-        members_names = [f'- ``[{"НЕАКТИВЕН" if member in dead_members else "АКТИВЕН"}]`` {Character(member).name} ({member}) - ходит {battle.actor_turn_index(member) if battle.actor_turn_index(member) else "||неизвестно||"}/{len(battle.turn_order())}' for member in total_members]
+        members_names = [f'- ``[{"НЕАКТИВЕН" if member in dead_members else "АКТИВЕН"}]`` {Character(member).name} ({member}) - ходит {battle.actor_turn_index(member)+1 if battle.actor_turn_index(member) else "||неизвестно||"}/{len(battle.turn_order())}' for member in total_members]
 
         total_text = '\n'.join(members_names)
 
@@ -1109,7 +1493,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @cmb_info.command(name='текущий-ход')
+    @cmb_info.command(name='текущий-ход', description="Узнать текущий ход и когда будет действовать ваш персонаж")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __my_turn(self, ctx, character_id:int=None):
@@ -1119,22 +1503,22 @@ class CharacterCombat(BasicCog):
         my_turn = battle.actor_turn_index(character_id)
         current_turn = battle.current_turn_index()
 
-        embed = ArbEmbed(f'Текущий ход: {current_turn} / {len(turn_order)}',
-                         f'-# Ваш номер хода - {my_turn}{" **(ВАШ ХОД!)**" if my_turn == current_turn else ""}',
+        embed = ArbEmbed(f'Текущий ход: {current_turn+1} / {len(turn_order)}',
+                         f'-# Ваш номер хода - {my_turn+1}{" **(ВАШ ХОД!)**" if my_turn == current_turn else ""}',
                          footer=f'{Character(character_id).name}',
                          footer_logo=Character(character_id).picture)
 
         await ctx.respond(embed=embed)
 
 
-    @cmb_info.command(name='текущий-бой')
+    @cmb_info.command(name='текущий-бой', description="Узнать информацию о текущем бое")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __my_battle(self, ctx, character_id:int=None):
         battle = await self.find_battle(character_id)
         await self.battle_info(ctx, battle, character_id)
 
-    @commands.slash_command(name='осмотреть-оружие')
+    @commands.slash_command(name='осмотреть-оружие', description="Осмотреть оружие в руках и узнать информацию о нем")
     @BasicCog.character_required
     async def __expect_weapon(self, ctx, character_id:int=None):
         from ArbWeapons import Weapon
@@ -1182,7 +1566,7 @@ class CharacterCombat(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @cmb_info.command(name=f'боевая-информация')
+    @cmb_info.command(name=f'боевая-информация', description="Узнать боевую информацию персонажа (ОД, Слой, Укрытие)")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __combat_info(self, ctx, character_id:int=None):
@@ -1193,13 +1577,15 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond('', embed=embed)
 
-    @detection.command(name=f'осмотреть')
+    @detection.command(name=f'осмотреть', description="Осмотреться вокруг и узнать о текущем местоположении в бою и противниках")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __combat_lookout(self, ctx, character_id: int=None):
         from ArbBattle import ActorVision
         actor = Actor(character_id)
         vision = ActorVision(actor)
+
+        mes = await ctx.respond('***Вы осматриваетесь...***', ephemeral=True)
 
         total_text, chunks = vision.string_vigilance()
         embeds = []
@@ -1211,11 +1597,16 @@ class CharacterCombat(BasicCog):
         view = Paginator(embeds, ctx, ignore_footer=True)
 
         await ctx.respond('', embed=embeds[0], view=view, ephemeral=True)
+        await mes.delete_original_response()
 
-    @detection.command(name=f'прислушаться')
+    @detection.command(name=f'прислушаться', description="Прислушаться к звуку боя и определить его источник")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __detect_sound(self, ctx, sound_id:int, character_id: int = None):
+    async def __detect_sound(self, ctx,
+                             sound: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_sounds)),
+                             character_id: int = None):
+        sound_id = BasicCog.prepare_id(sound)
+
         actor = Actor(character_id)
         responses = actor.detect_sound(sound_id)
 
@@ -1226,7 +1617,7 @@ class CharacterCombat(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @detection.command(name=f'звуки')
+    @detection.command(name=f'звуки', description="Прислушаться к звукам боя")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __combat_sounds(self, ctx, character_id: int = None):
@@ -1246,10 +1637,14 @@ class CharacterCombat(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @movement.command(name='перейти-на-слой')
+    @movement.command(name='перейти-на-слой', description="Перейти на другую позицию (слой) в бою")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __move_to_layer(self, ctx, layer_id:int, character_id: int=None):
+    async def __move_to_layer(self, ctx,
+                              layer: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_layers)),
+                              character_id: int=None):
+        layer_id = BasicCog.prepare_id(layer)
+
         actor = Actor(character_id)
         responses: ActionManager = actor.move_to_layer(layer_id)
         embeds = responses.log
@@ -1258,10 +1653,14 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @movement.command(name='укрыться')
+    @movement.command(name='укрыться', description="Занять одно из укрытий (объектов)")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __move_to_object(self, ctx, object_id: int = None, character_id: int = None):
+    async def __move_to_object(self, ctx,
+                               object: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_objects), required=False),
+                               character_id: int = None):
+        object_id = BasicCog.prepare_id(object)
+
         actor = Actor(character_id)
         responses: ActionManager = actor.move_to_object(object_id)
         embeds = responses.log
@@ -1270,7 +1669,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @movement.command(name='сбежать')
+    @movement.command(name='сбежать', description="Сбежать с поля боя")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __escape(self, ctx, character_id: int = None):
@@ -1282,10 +1681,12 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @movement.command(name='полет')
+    @movement.command(name='полет', description="Взлететь в воздух")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __fly(self, ctx, height: int = None, character_id: int = None):
+    async def __fly(self, ctx,
+                    height: discord.Option(int, min_value=0, max_value=500, default=None, required=False),
+                    character_id: int = None):
         actor = Actor(character_id)
         responses: ActionManager = actor.fly(height)
         embeds = responses.log
@@ -1294,10 +1695,12 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_range.command(name='перезарядить')
+    @cmb_range.command(name='перезарядить', description="Перезарядить оружие в руках")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __reload(self, ctx, ammo_type: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(ammo_type), required=True), character_id: int = None):
+    async def __reload(self, ctx,
+                       ammo_type: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(ammo_type), required=True),
+                       character_id: int = None):
         actor = Actor(character_id)
 
         ammo_id = AAC.extract('AMMO', 'name', ammo_type, 'id')
@@ -1309,7 +1712,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_range.command(name='стрелять')
+    @cmb_range.command(name='стрелять', description="Совершить выстрел из оружия в руках")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __range_attack(self, ctx, enemy_id: int=None, character_id: int = None):
@@ -1326,10 +1729,13 @@ class CharacterCombat(BasicCog):
         # await view.update_button()
         # await ctx.respond(embed=embeds[0], view=view)
 
-    @melee.command(name='ударить')
+    @melee.command(name='ударить', description="Ударить в ближнем бою при помощи оружия в руках")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __melee_attack(self, ctx, enemy_id:int=None, character_id: int = None):
+    async def __melee_attack(self, ctx,
+                             enemy: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_melees)),
+                             character_id: int = None):
+        enemy_id = BasicCog.prepare_id(enemy)
         actor = Actor(character_id)
         responses: ActionManager = actor.melee_attack(enemy_id)
         embeds = responses.log
@@ -1338,10 +1744,15 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @melee.command(name='боевой-приём')
+    @melee.command(name='боевой-приём', description="Совершить приём (Боевые искусства) используя собственное тело или импланты")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __race_attack(self, ctx, enemy_id: int = None, attack_id:str=None, character_id: int = None):
+    async def __race_attack(self, ctx,
+                            enemy_id: discord.Option(int, required=False,),
+                            attack: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_race_attacks), required=False, default=None),
+                            character_id: int = None):
+        attack_id = attack.split(' ')[0] if attack else None
+
         actor = Actor(character_id)
         responses: ActionManager = actor.race_attack(enemy_id, attack_id)
         embeds = responses.log
@@ -1350,19 +1761,20 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @combat.command(name='кинуть-гранату')
+    @combat.command(name='кинуть-гранату', description="Бросить гранату в противника")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __grenade_attack(self, ctx, enemy_id: int = None, grenade_id: int = None, character_id: int = None):
+    async def __grenade_attack(self, ctx, layer: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_near_layers)), grenade_id: int = None, character_id: int = None):
+        layer_id = BasicCog.prepare_id(layer)
         actor = Actor(character_id)
-        responses: ActionManager = actor.throw_grenade(enemy_id, grenade_id)
+        responses: ActionManager = actor.throw_grenade(layer_id, grenade_id)
         embeds = responses.log
 
         await embeds.view_responds(ctx)
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_range.command(name='прицелиться')
+    @cmb_range.command(name='прицелиться', description="Навести прицел на врага сделав его своей целью")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __set_target(self, ctx, enemy_id: int = None, character_id: int = None):
@@ -1374,7 +1786,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @melee.command(name='сблизитьтся')
+    @melee.command(name='сблизитьтся', description="Сблизиться и навязать противнику ближний бой")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __set_melee_target(self, ctx, enemy_id: int = None, character_id: int = None):
@@ -1386,7 +1798,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @melee.command(name='отдалиться')
+    @melee.command(name='отдалиться', description="Отдалиться и сбежать из ближнего боя")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __flee_from_melee(self, ctx, character_id: int = None):
@@ -1398,7 +1810,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @interact.command(name='с-объектом')
+    @interact.command(name='с-объектом', description="Взаимодействовать с объектом, рядом с которым вы находитесь")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __object_interaction(self, ctx, target_id:int=None, character_id: int = None):
@@ -1410,7 +1822,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='охотиться')
+    @cmb_control.command(name='охотиться', description="Тактика охоты на противника - подловить врага во время активных боевых действий")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __hunt(self, ctx, enemy_id:int=None, character_id: int = None):
@@ -1422,10 +1834,13 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='подавить')
+    @cmb_control.command(name='подавить', description="Тактика подавления укрытия - противник при попытки его занять или покинуть получит урон")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __suppress(self, ctx, cover_id: int = None, character_id: int = None):
+    async def __suppress(self, ctx,
+                         cover: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_all_objects)),
+                         character_id: int = None):
+        cover_id = BasicCog.prepare_id(cover)
         actor = Actor(character_id)
         responses: ActionManager = actor.set_suppression(cover_id)
         embeds = responses.log
@@ -1434,10 +1849,14 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='сдержать')
+    @cmb_control.command(name='сдержать', description="Тактика сдерживания слоя - противники перемещающиеся по слою будут получать урон")
     @BasicCog.character_required
     @BasicCog.in_battle
-    async def __contain(self, ctx, layer_id: int = None, character_id: int = None):
+    async def __contain(self, ctx,
+                        layer: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_near_layers)),
+                        character_id: int = None):
+        layer_id = BasicCog.prepare_id(layer)
+
         actor = Actor(character_id)
         responses: ActionManager = actor.set_containment(layer_id)
         embeds = responses.log
@@ -1446,7 +1865,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='дозор')
+    @cmb_control.command(name='дозор', description="Приготовиться к потенциальной дальней атаки противника, чтобы перехватить его и контратаковать")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __overwatch(self, ctx, character_id: int = None):
@@ -1458,7 +1877,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='ожидать')
+    @cmb_control.command(name='ожидать', description="Прекратить активно действовать и ждать, перенся свои очки действия на следующий раунд")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __wait(self, ctx, character_id: int = None):
@@ -1470,7 +1889,7 @@ class CharacterCombat(BasicCog):
 
         await Notification.send_all_notifications(ctx)
 
-    @cmb_control.command(name='прекратить')
+    @cmb_control.command(name='прекратить', description="Прекратить выполнение текущих тактик")
     @BasicCog.character_required
     @BasicCog.in_battle
     async def __stop(self, ctx, character_id: int = None):
@@ -1483,7 +1902,7 @@ class CharacterCombat(BasicCog):
         await Notification.send_all_notifications(ctx)
 
 
-    @coordinator.command(name='артудар')
+    @coordinator.command(name='артудар', description="(Координатор) Вы совершаете артиллерийский удар по указанной позиции (слою)")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __artillery_strike(self, ctx, layer_id:int, strikes:int = 1, character_id: int = None):
@@ -1497,7 +1916,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='подкрепление')
+    @coordinator.command(name='подкрепление', description="(Координатор) Вызовите в текущий бой подкрепление из числа вашей организации")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __reinforcement(self, ctx, layer_id: int, units: int = 1, character_id: int = None):
@@ -1511,7 +1930,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='сбросить-мины')
+    @coordinator.command(name='сбросить-мины', description="(Координатор) Сбросьте мины на один из слоёв боя")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __mines(self, ctx, layer_id: int, mines: int = 1, character_id: int = None):
@@ -1524,7 +1943,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='немедленная-эвакуация')
+    @coordinator.command(name='немедленная-эвакуация', description="(Координатор) Моментально Эвакуирует всех членов команды (они покинут бой)")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __emergency_evacuation(self, ctx, layer_id: int, character_id: int = None):
@@ -1537,7 +1956,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='сбросить-патроны')
+    @coordinator.command(name='сбросить-патроны', description="(Координатор) Сбросить ящик с патронами на выбранный слой")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __supply_ammo(self, ctx, layer_id: int, value:int, character_id: int = None):
@@ -1550,7 +1969,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='сбросить-гранаты')
+    @coordinator.command(name='сбросить-гранаты', description="(Координатор) Сбросить ящик с гранатами на выбранный слой")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __supply_grenades(self, ctx, layer_id: int, value: int, character_id: int = None):
@@ -1563,7 +1982,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='сбросить-медпомощь')
+    @coordinator.command(name='сбросить-медпомощь', description="(Координатор) Сбросить ящик с медикаментами на выбранный слой")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __supply_firstaid(self, ctx, layer_id: int, value: int, character_id: int = None):
@@ -1576,7 +1995,7 @@ class CharacterCombat(BasicCog):
 
         await ctx.respond(embed=embeds[0])
 
-    @coordinator.command(name='сбросить-инструменты')
+    @coordinator.command(name='сбросить-инструменты', description="(Координатор) Сбросить ящик с инструментами на выбранный слой")
     @BasicCog.character_required
     @BasicCog.character_is_coordinator
     async def __supply_toolkit(self, ctx, layer_id: int, value: int, character_id: int = None):
@@ -1590,6 +2009,7 @@ class CharacterCombat(BasicCog):
         await ctx.respond(embed=embeds[0])
 
 
+
 class InventoryManager(BasicCog):
     inv = discord.SlashCommandGroup("инвентарь", "Команды инвентаря")
     equipment = inv.create_subgroup('экипировать', 'Команды экипировки')
@@ -1600,7 +2020,7 @@ class InventoryManager(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -1615,7 +2035,7 @@ class InventoryManager(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -1630,7 +2050,7 @@ class InventoryManager(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -1644,7 +2064,7 @@ class InventoryManager(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -1660,23 +2080,24 @@ class InventoryManager(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
 
         if not Actor(character, data_manager=db).battle_id:
             group_members = Group.find_group_members_including(character)
-            return [f'{member} - {Character(character, data_manager=db).name}' for member in group_members]
+            return [f'{member} - {Character(member, data_manager=db).name}' for member in group_members]
         else:
             print('тут')
             actor = Actor(character, data_manager=db)
 
             nearby_actors = db.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {actor.battle_id} AND layer_id = {actor.layer_id}')
+            nearby_dead = db.select_dict('BATTLE_DEAD', filter=f'battle_id = {actor.battle_id} AND layer_id = {actor.layer_id}')
             print(nearby_actors)
-            return [f'{member.get("character_id")} - {Character(member.get("character_id"), data_manager=db).name}' for member in nearby_actors]
+            return [f'{member.get("character_id")} - {Character(member.get("character_id"), data_manager=db).name}' for member in nearby_actors + nearby_dead]
 
-    @equipment.command(name='надеть')
+    @equipment.command(name='надеть', description="Надеть элемент экипировки, который находится в инвентаре")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __equip_clothes(self, ctx,
@@ -1706,7 +2127,7 @@ class InventoryManager(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @equipment.command(name='взять-оружие')
+    @equipment.command(name='взять-оружие', description="Сменить оружие в руках на другое, доступное в инвентаре")
     @BasicCog.character_required
     async def __equip_weapon(self, ctx,
                               item: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(weapons), required=False),
@@ -1735,7 +2156,7 @@ class InventoryManager(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @equipment.command(name='выбросить')
+    @equipment.command(name='выбросить', description="Выбросить пердмет инвентаря или экипировки")
     @BasicCog.character_required
     async def __lost_item(self, ctx,
                           item: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(items), required=False),
@@ -1765,7 +2186,7 @@ class InventoryManager(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @equipment.command(name='снять')
+    @equipment.command(name='снять', description="Снять элемент экипировки")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __unequip(self, ctx,
@@ -1795,7 +2216,7 @@ class InventoryManager(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @equipment.command(name='снять-всё')
+    @equipment.command(name='снять-всё', description="Снимает всю надетую экипировку")
     @BasicCog.admin_required
     @BasicCog.not_in_battle
     async def __unequip_all(self, ctx, character_id: int = None):
@@ -1809,7 +2230,7 @@ class InventoryManager(BasicCog):
         embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
         await ctx.respond(embed=embed)
 
-    @equipment.command(name='выбрать-всё')
+    @equipment.command(name='выбрать-всё', description="Выбросить все предметы инвентаря и элементы экипировки")
     @BasicCog.admin_required
     @BasicCog.not_in_battle
     async def __lost_all_items(self, ctx, character_id: int = None):
@@ -1831,7 +2252,7 @@ class InventoryManager(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @inv.command(name='использовать-предмет')
+    @inv.command(name='использовать-предмет', description="Использовать интерактивный предмет")
     @BasicCog.character_required
     async def __use_item(self, ctx,
                          item: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(items), required=True),
@@ -1845,12 +2266,51 @@ class InventoryManager(BasicCog):
 
         target_id = BasicCog.prepare_id(target) if target else character_id
 
-        respond = usage.use(target_id)
+        if Battlefield.get_actor_battle(character_id) is not None:
+            result = Actor(character_id).ap_use(1)
+            if not result:
+                await ctx.respond(embed=ErrorEmbed('Недостаточно очков действия', 'У вас недостаточно очков действия для использования предмета'))
+                return
+
+        respond = usage.use(target_id, owner_id=character_id)
 
         embeds = respond.get_embeds()
         view = Paginator(embeds, ctx)
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
+
+    @inv.command(name='передать')
+    @BasicCog.character_required
+    async def __give_item(self, ctx,
+                          item: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(items), required=True),
+                          target: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_targets_to_use), required=True),
+                          character_id: int = None):
+        from ArbItems import Item, Inventory, CharacterEquipment
+
+        item_id = BasicCog.prepare_id(item)
+        item_to_give = Item(item_id)
+
+        target_id = BasicCog.prepare_id(target)
+        inventory = Inventory.get_inventory_by_character(target_id)
+
+        if not inventory:
+            await ctx.respond(embed=ErrorEmbed('Инвентарь получателя не найден', 'Получатель не найден в базе данных'))
+            return
+
+        # if inventory.is_full():
+        #     await ctx.respond(embed=ErrorEmbed('Инвентарь переполнен', 'Инвентарь получателя переполнен'))
+        #     return
+
+        character_equipment = [i.item_id for i in CharacterEquipment(character_id).get_equiped_items()]
+        if item_to_give.item_id in character_equipment:
+            CharacterEquipment(item_to_give.item_id).unequip_item(item_to_give.item_id)
+        item_to_give.set_to_inventory(inventory.inventory_id)
+
+        embed = SuccessEmbed(f'{item_to_give.label} передан',
+                             f'***{Character(character_id).name}** передал **{item_to_give.label}** **{Character(target_id).name}**')
+        embed.set_author(Character(character_id).name, icon_url=Character(character_id).picture)
+        await ctx.respond(embed=embed)
+
 
 
 
@@ -1862,7 +2322,7 @@ class CharacterSkills(BasicCog):
         from ArbSkills import Skill
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -1870,7 +2330,7 @@ class CharacterSkills(BasicCog):
         skills = Skill.get_skills(character)
         return [skill.label for skill in skills]
 
-    @skill.command(name='навыки-персонажа')
+    @skill.command(name='навыки-персонажа', description="Узнать уровень владения навыками и прогресс развития персонажа")
     @BasicCog.character_required
     async def __get_skills(self, ctx, character_id: int = None):
         from ArbSkills import Skill
@@ -1890,7 +2350,7 @@ class CharacterSkills(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @skill.command(name='улучшить-навык')
+    @skill.command(name='улучшить-навык', description="Прокачать навык используя Очки навыков, Очки профессионализма или опыт")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __skill_upgrade(self, ctx,
@@ -1997,7 +2457,7 @@ class CharacterLocations(BasicCog):
         from ArbItems import ItemTranslate
 
         choosen_trader = ctx.options.get('trader')
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{choosen_trader}"')[0].get('id')
         vendor = VendorObject(vendor_id, data_manager=db)
         vendor_items = []
@@ -2011,7 +2471,7 @@ class CharacterLocations(BasicCog):
         from ArbItems import ItemTranslate
 
         choosen_trader = ctx.options.get('healer')
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{choosen_trader}"')[0].get('id')
         vendor = MedicineVendor(vendor_id, data_manager=db)
         vendor_items = vendor.get_items().get('implants', [])
@@ -2061,7 +2521,7 @@ class CharacterLocations(BasicCog):
         from ArbItems import ItemTranslate
 
         choosen_trader = ctx.options.get('intendant')
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{choosen_trader}"')[0].get('id')
         vendor = VendorObject(vendor_id, data_manager=db)
         vendor_items = []
@@ -2071,7 +2531,7 @@ class CharacterLocations(BasicCog):
         return [ItemTranslate(item_label, data_manager=db).translation for item_label in vendor_items]
 
     async def qualities(ctx: discord.AutocompleteContext):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         return [quality.get("name") for quality in db.select_dict('QUALITY_INIT')]
 
     async def item_available_materials(ctx: discord.AutocompleteContext):
@@ -2080,7 +2540,7 @@ class CharacterLocations(BasicCog):
         from ArbGenerator import ItemManager
 
         choosen_trader = ctx.options.get('intendant')
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{choosen_trader}"')[0].get('id')
         vendor = VendorObject(vendor_id, data_manager=db)
         vendor_tier = vendor.max_tier
@@ -2116,7 +2576,7 @@ class CharacterLocations(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -2133,7 +2593,7 @@ class CharacterLocations(BasicCog):
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
         implant = ctx.options['implant']
-        db = DataManager()
+        db = DEFAULT_MANAGER
         implant_id = ItemTranslate.find_id_by_name(implant, db)
         implant_type = ImplantType(implant_id, data_manager=db)
 
@@ -2141,7 +2601,7 @@ class CharacterLocations(BasicCog):
             character = Player(author, data_manager=db).current_character
 
         body = Body(character, data_manager=db).get_body_elements()
-        total_elements = [f'{e.element_id} - {e.label}' for e in body if (not e.check_if_replaced_with_implant()) and (e.type == implant_type.install_slot)]
+        total_elements = [f'{e.element_id} - {e.label}' for e in body if (not e.implant) and (e.type == implant_type.install_slot)]
 
         return total_elements
 
@@ -2151,7 +2611,7 @@ class CharacterLocations(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -2164,33 +2624,20 @@ class CharacterLocations(BasicCog):
         from ArbLocations import CharacterLocation, Location
         from ArbCore import Player
 
+        db = DEFAULT_MANAGER
+
         character_id = ctx.options.get('character_id')
         if not character_id:
             character_id = Player(ctx.interaction.user.id).current_character
 
-        dislocation = CharacterLocation(character_id)
+        dislocation = CharacterLocation(character_id, data_manager=db)
 
-        filtered_locations = dislocation.get_all_viewed_locations()
+        filtered_locations = dislocation.get_viewed_locations()
+        print(filtered_locations)
 
-        return [f'{loc.label}' for loc in filtered_locations]
+        return [f'{loc} - {Location(loc, data_manager=db).label}' for loc in filtered_locations]
 
-    def get_viewed_locations(self, character_id:int):
-        from ArbLocations import CharacterLocation, Location
-        dislocation = CharacterLocation(character_id)
-
-        all_locations = dislocation.graph_all_locations()
-        filtered_locations = [loc for loc in all_locations if Location(loc).is_location_viewed(character_id)]
-        get_dislocation_connections = [loc.loc_id for loc in dislocation.location.process_connections()]
-        get_connections_connections = []
-        for loc in get_dislocation_connections:
-            for con in Location(loc).process_connections():
-                get_connections_connections.append(con.loc_id)
-
-        total_locs = filtered_locations + get_dislocation_connections + get_connections_connections
-        total_locs = list(set(total_locs))
-        return [Location(loc) for loc in total_locs]
-
-    @loc_info.command(name='регион')
+    @loc_info.command(name='регион', description="Узнать информацию о регионе, в котором вы находитесь")
     @BasicCog.character_required
     async def __what_region(self, ctx, character_id:int=None):
         from ArbLocations import Cluster, Location, CharacterLocation
@@ -2237,49 +2684,55 @@ class CharacterLocations(BasicCog):
         await view.update_button()
         await ctx.respond(embed=main_embed, view=view)
 
-    @loc_info.command(name='локации-региона')
+    @loc_info.command(name='локации-региона', description="Посмотреть известные локации региона и их владельцев")
     @BasicCog.character_required
-    async def __region_locations(self, ctx, character_id:int=None):
-        from ArbLocations import CharacterLocation
+    async def __region_locations(self, ctx: discord.ApplicationContext, character_id:int=None):
+        from ArbLocations import CharacterLocation, Location
 
-        location = CharacterLocation(character_id)
-        region = location.location.cluster
+        mes = await ctx.respond('-# Собираем информацию о регионе...', ephemeral=True)
+        db = DEFAULT_MANAGER
+        location = CharacterLocation(character_id, data_manager=db)
 
-        filtered_locations = [loc for loc in region.get_locations() if loc.is_location_viewed(character_id)]
+        filtered_locations = location.get_viewed_locations(location.location.cluster.id)
+        if not filtered_locations:
+            embed = ArbEmbed('Локации региона не найдены', '-# В регионе нет ни одной видимой локации')
+            await ctx.respond(embed=embed)
+            await mes.delete_original_response()
+            return
 
         text = []
         for loc in filtered_locations:
-            text.append(f'- *{loc.type.label} **{loc.label}***\n - -# *Владелец: **{loc.get_owner().label if loc.owner else "Независимые"}***\n\n')
-
-        if not text:
-            embed = ArbEmbed('Локации региона не найдены', '-# В регионе нет ни одной видимой локации')
-            await ctx.respond(embed=embed)
-            return
+            a_loc = Location(loc, data_manager=db)
+            text.append(f'- *{a_loc.type.label} **{a_loc.label}***\n-# > *Владелец: **{a_loc.get_owner().label if a_loc.owner else "Независимые"}***\n\n')
 
         chunked_text = ListChunker(10, text)
         embeds = []
         for chunk in chunked_text:
-            embed = ArbEmbed(f'Локации региона ({region.label})', "".join(chunk), picture=region.map)
+            embed = ArbEmbed(f'Локации региона ({location.location.cluster.label})', "".join(chunk), picture=location.location.cluster.map)
             embeds.append(embed)
 
         view = Paginator(embeds, ctx, ignore_footer=True)
         await view.update_button()
+        await mes.delete_original_response()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @loc_info.command(name='путь-до-локации')
+    @loc_info.command(name='путь-до-локации', description="Проложить маршрут до нужной локации")
     @BasicCog.character_required
     async def __path_finder(self, ctx, location: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(viewed_locations)), character_id:int=None):
         from ArbLocations import CharacterLocation, Location
 
-        dislocation = CharacterLocation(character_id)
-        end_id = ArbAutoComplete.extract('LOC_INIT', 'label', location, 'id')
+        db = DEFAULT_MANAGER
+
+        dislocation = CharacterLocation(character_id, data_manager=db)
+        end_id = location.split(' ')[0]
+        print(end_id)
         if dislocation.location.id == end_id:
             embed = ArbEmbed('Путь', '-# Вы уже находитесь на выбранной локации, вам не нужно искать дорогу')
             await ctx.respond(embed=embed)
             return
 
-        filtered_locations = [loc.id for loc in dislocation.get_all_viewed_locations()]
-
+        filtered_locations = [loc for loc in dislocation.get_viewed_locations()]
+        print(filtered_locations)
         if end_id not in filtered_locations:
             embed = ArbEmbed('Путь не найден', '-# Путь из текущей локации в указанную не найден')
             await ctx.respond(embed=embed)
@@ -2302,7 +2755,7 @@ class CharacterLocations(BasicCog):
         await ctx.respond(embed=embed)
 
 
-    @loc_info.command(name='локация')
+    @loc_info.command(name='локация', description="Узнать информацию о локации, в которой вы находитесь")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __where_am_i(self, ctx, character_id:int=None):
@@ -2321,7 +2774,7 @@ class CharacterLocations(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @loc.command(name='перейти-в')
+    @loc.command(name='перейти-в', description="Переместиться на территорию ближайших доступных локаций")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     @BasicCog.is_group_leader_or_single
@@ -2330,10 +2783,20 @@ class CharacterLocations(BasicCog):
                                  character_id:int=None):
         from ArbLocations import CharacterLocation, Location
 
-        char_loc = CharacterLocation(character_id)
+        db = DEFAULT_MANAGER
+
+        char_loc = CharacterLocation(character_id, data_manager=db)
         connections_desc = char_loc.describe_connections()
         near_locations = [loc.loc_id for loc in char_loc.location.process_connections()]
-        location_id = ArbAutoComplete.extract('LOC_INIT', 'label', location, 'id')
+        location_ids = [loc.get('id') for loc in db.select_dict('LOC_INIT', filter=f'label = "{location}"')]
+        print(near_locations)
+        for loc in location_ids:
+            if loc in near_locations:
+                print(loc)
+                location_id = loc
+                break
+        else:
+            location_id = None
 
         if not location_id or location_id not in near_locations:
             embed = ArbEmbed('Доступные для перемещения локации', connections_desc, footer=f'Доступно очков путешествия: {char_loc.movement_points}')
@@ -2361,7 +2824,7 @@ class CharacterLocations(BasicCog):
                 embed = SuccessEmbed('Перемещение в локацию', f'*{Location(location_id).cluster.move_desc} **{location} ({Location(location_id).type.label})***')
                 await ctx.respond(embed=embed)
 
-    @loc_move.command(name='войти-в-локацию')
+    @loc_move.command(name='войти-в-локацию', description="Пройти внутрь территории текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     @BasicCog.is_group_leader_or_single
@@ -2393,7 +2856,7 @@ class CharacterLocations(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @loc_move.command(name='покинуть-локацию')
+    @loc_move.command(name='покинуть-локацию', description="Покинуть внутреннюю территорию текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     @BasicCog.is_group_leader_or_single
@@ -2415,7 +2878,7 @@ class CharacterLocations(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @loc_trade.command(name='торговать')
+    @loc_trade.command(name='торговать', description="Купить предметы у торговца на текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __trade(self, ctx,
@@ -2433,8 +2896,23 @@ class CharacterLocations(BasicCog):
         character = Character(character_id)
         location = CharacterLocation(character_id)
 
-        db = DataManager()
-        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{trader}"')[0].get('id')
+        db = DEFAULT_MANAGER
+        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{trader}"')
+        if not vendor_id:
+            vendor_id = db.select_dict('LOC_OBJECTS', filter=f'id = "{location.location.id}" AND label = "{trader}"')
+            if vendor_id:
+                vendor_id = vendor_id[0].get('type')
+        else:
+            vendor_id = vendor_id[0].get('id')
+
+        if not vendor_id:
+            embed = ErrorEmbed('Торговец не найден',
+                                   f'-# Торговец **{trader}** не найден в текущей локации или не существует!',
+                                   footer=f'Текущий баланс: {ct}{character.money}',
+                                   footer_logo=character.picture)
+            await ctx.respond(embed=embed)
+            return
+
         vendor = VendorObject(vendor_id, data_manager=db)
 
         if not item:
@@ -2477,7 +2955,7 @@ class CharacterLocations(BasicCog):
                                    footer_logo=character.picture)
                 await ctx.respond(embed=embed)
 
-    @loc_borrow.command(name='одолжить')
+    @loc_borrow.command(name='одолжить', description="Одолжить предмет у интенданта на текущей локации в обмен на репуутацию")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __borrow(self, ctx,
@@ -2485,7 +2963,7 @@ class CharacterLocations(BasicCog):
                        item: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(intendant_assort), required=False),
                        material: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(item_available_materials), required=False),
                        quality: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(qualities), required=False),
-                       endurance: discord.Option(int, min_value=1, max_value=100, required=False),
+                       endurance: discord.Option(int, min_value=30, max_value=100, required=False),
                        character_id: int=None):
         from ArbLocations import CharacterLocation
         from ArbOrgs import Organization
@@ -2496,8 +2974,21 @@ class CharacterLocations(BasicCog):
         character = Character(character_id)
         location = CharacterLocation(character_id)
 
-        db = DataManager()
-        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{intendant}"')[0].get('id')
+        db = DEFAULT_MANAGER
+        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{intendant}"')
+        if not vendor_id:
+            vendor_id = db.select_dict('LOC_OBJECTS', filter=f'id = "{location.location.id}" AND label = "{intendant}"')
+            if vendor_id:
+                vendor_id = vendor_id[0].get('type')
+        else:
+            vendor_id = vendor_id[0].get('id')
+
+        if not vendor_id:
+            embed = ErrorEmbed('Интендант не найден',
+                               f'-# Интендант **{intendant}** не найден в текущей локации или не существует!',
+                               footer_logo=character.picture)
+            await ctx.respond(embed=embed)
+            return
         vendor = VendorObject(vendor_id, data_manager=db)
         org_id = location.location.owner
         org = Organization(org_id, data_manager=db) if org_id else Organization('Civil', data_manager=db)
@@ -2551,7 +3042,7 @@ class CharacterLocations(BasicCog):
                                    footer_logo=character.picture)
                 await ctx.respond(embed=embed)
 
-    @loc_borrow.command(name='пожертвовать')
+    @loc_borrow.command(name='пожертвовать', description="Пожертвовать предмет инвентаря интенданту на текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __donate(self, ctx,
@@ -2563,11 +3054,25 @@ class CharacterLocations(BasicCog):
         from ArbVendors import VendorObject
         from ArbItems import Item
 
-        character = Character(character_id)
-        location = CharacterLocation(character_id)
+        db = DEFAULT_MANAGER
+        character = Character(character_id, data_manager=db)
+        location = CharacterLocation(character_id, data_manager=db)
 
-        db = DataManager()
-        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{intendant}"')[0].get('id')
+
+        vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{intendant}"')
+        if not vendor_id:
+            vendor_id = db.select_dict('LOC_OBJECTS', filter=f'id = "{location.location.id}" AND label = "{intendant}"')
+            if vendor_id:
+                vendor_id = vendor_id[0].get('type')
+        else:
+            vendor_id = vendor_id[0].get('id')
+
+        if not vendor_id:
+            embed = ErrorEmbed('Интендант не найден',
+                               f'-# Интендант **{intendant}** не найден в текущей локации или не существует!',
+                               footer_logo=character.picture)
+            await ctx.respond(embed=embed)
+            return
         vendor = VendorObject(vendor_id, data_manager=db)
         org_id = location.location.owner
         org = Organization(org_id, data_manager=db) if org_id else Organization('Civil', data_manager=db)
@@ -2584,7 +3089,7 @@ class CharacterLocations(BasicCog):
                              footer_logo=character.picture)
         await ctx.respond(embed=embed)
 
-    @loc_heal.command(name='установить-имплант')
+    @loc_heal.command(name='установить-имплант', description="Установить имплант в медицинском учреждении текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __set_implant(self, ctx,
@@ -2596,7 +3101,7 @@ class CharacterLocations(BasicCog):
         from ArbOrgs import Organization
         from ArbVendors import MedicineVendor
         from ArbItems import ItemTranslate
-        from ArbHealth import Implant
+        from ArbHealth import Implant, Disease
         from ArbCore import Server
 
         ct = Server(ctx.guild.id).currency
@@ -2604,7 +3109,7 @@ class CharacterLocations(BasicCog):
         character = Character(character_id)
         location = CharacterLocation(character_id)
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{healer}"')[0].get('id')
         vendor = MedicineVendor(vendor_id, data_manager=db)
         org_id = location.location.owner
@@ -2645,6 +3150,7 @@ class CharacterLocations(BasicCog):
             result = character.spend_reputation(org_id, item_price) if vendor.type == 'Интендант' else character.spend_money(item_price)
             if result:
                 Implant.create_implant(character_id, item_id, place.split(' ')[0])
+                Disease.create_character_disease(character_id, 'Anesthesia', severity=100, immunity=50)
                 embed = SuccessEmbed(f'Установление импланта {vendor.label} {org.label}',
                                      f'*Вы установили **{implant}** у **{vendor.label} {org.label}** за **{item_price}{price_tag}***',
                                      footer=f'Текущие средства: {character_balance}%',
@@ -2657,7 +3163,7 @@ class CharacterLocations(BasicCog):
                                    footer_logo=character.picture)
                 await ctx.respond(embed=embed)
 
-    @loc_heal.command(name='вырезать-имплант')
+    @loc_heal.command(name='вырезать-имплант', description="Вырезать имплант в медицинском учреждении текущей локации")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __delete_implant(self, ctx,
@@ -2670,7 +3176,7 @@ class CharacterLocations(BasicCog):
         from ArbOrgs import Organization
         from ArbVendors import MedicineVendor
         from ArbDamage import Damage
-        from ArbHealth import Implant, BodyElement
+        from ArbHealth import Implant, BodyElement, Disease
         from ArbCore import Server
 
         ct = Server(ctx.guild.id).currency
@@ -2678,7 +3184,7 @@ class CharacterLocations(BasicCog):
         character = Character(character_id)
         location = CharacterLocation(character_id)
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         vendor_id = db.select_dict('LOC_OBJECTS_INIT', filter=f'label = "{healer}"')[0].get('id')
         vendor = MedicineVendor(vendor_id, data_manager=db)
         org_id = location.location.owner
@@ -2701,6 +3207,7 @@ class CharacterLocations(BasicCog):
             implant_obj = Implant(item_id, data_manager=db)
             place = implant_obj.place
             Implant.delete_implant(int(item_id))
+            Disease.create_character_disease(character_id, 'Anesthesia', severity=100, immunity=50)
             element = BodyElement(character_id, place, data_manager=db)
             element.apply_damage(Damage(element.max_health, 'SurgicalCut', 1000, root='Хирургическая операция'))
 
@@ -2746,16 +3253,16 @@ class CharacterGroup(BasicCog):
 
         character_role = GroupRole(group.get_member_role(character.id))
         if character_role.id == 'Manager':
-            roles_list = [role.get('label') for role in DataManager().select_dict('GROUP_ROLES')]
+            roles_list = [role.get('label') for role in DEFAULT_MANAGER.select_dict('GROUP_ROLES')]
         elif character_role.is_leader:
-            roles_list = [role.get('label') for role in DataManager().select_dict('GROUP_ROLES') if role.get('is_leader') in [0, None]]
+            roles_list = [role.get('label') for role in DEFAULT_MANAGER.select_dict('GROUP_ROLES') if role.get('is_leader') in [0, None]]
         else:
-            roles_list = [role.get('label') for role in DataManager().select_dict('GROUP_ROLES') if role.get('is_leader') in [0, None]]
+            roles_list = [role.get('label') for role in DEFAULT_MANAGER.select_dict('GROUP_ROLES') if role.get('is_leader') in [0, None]]
 
         return roles_list
 
 
-    @group_mng.command(name='изгнать-из-группы')
+    @group_mng.command(name='изгнать-из-группы', description="(Лидер) Изгнать персонажа из управляемой группы")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __banish(self, ctx,
@@ -2791,7 +3298,7 @@ class CharacterGroup(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @group_mng.command(name='пригласить-в-группу')
+    @group_mng.command(name='пригласить-в-группу', description="(Лидер) Пригласить в группу персонажа")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __group_invite(self, ctx, member: discord.Option(discord.SlashCommandOptionType.user),
@@ -2838,10 +3345,10 @@ class CharacterGroup(BasicCog):
             await ctx.send(embed=embed)
         else:
             await waiting_message.delete_original_response()
-            embed = ErrorEmbed('Приглашение', f'-# *Приглашение в организацию **{group.label}** отклонено*')
+            embed = ErrorEmbed('Приглашение', f'-# *Приглашение в группу **{group.label}** отклонено*')
             await ctx.send(embed=embed)
 
-    @group_mng.command(name='распустить-группу')
+    @group_mng.command(name='распустить-группу', description="(Лидер) Распустить группу (группа исчезнет)")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __group_disband(self, ctx, character_id: int=None):
@@ -2871,7 +3378,7 @@ class CharacterGroup(BasicCog):
         embed.set_author(character.name, icon_url=character.picture)
         await ctx.respond(embed=embed)
 
-    @group_info.command(name='сведения-о-группе')
+    @group_info.command(name='сведения-о-группе', description="Узнать информацию о текущей группе")
     @BasicCog.character_required
     async def __group_info(self, ctx, character_id: int=None):
         from ArbGroups import Group, GroupRole
@@ -2902,7 +3409,7 @@ class CharacterGroup(BasicCog):
         await view.update_button()
         await ctx.respond(embed=embeds[0], view=view)
 
-    @group_mng.command(name='установить-роль')
+    @group_mng.command(name='установить-роль', description="(Лидер) Установить участнику группе роль")
     @BasicCog.character_required
     @BasicCog.not_in_battle
     async def __set_role(self, ctx,
@@ -2956,7 +3463,7 @@ class CharacterOrganization(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -2979,7 +3486,7 @@ class CharacterOrganization(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -3012,7 +3519,7 @@ class CharacterOrganization(BasicCog):
         from ArbCharacters import Character
 
         group = ctx.options.get('group')
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         group_id = AAC.extract('GROUP_INIT', 'label', group, 'id')
         group = Group(group_id, data_manager=db)
@@ -3026,7 +3533,7 @@ class CharacterOrganization(BasicCog):
 
         author = ctx.interaction.user.id
         character = ctx.options['character_id']
-        db = DataManager()
+        db = DEFAULT_MANAGER
 
         if not character:
             character = Player(author, data_manager=db).current_character
@@ -3045,7 +3552,7 @@ class CharacterOrganization(BasicCog):
 
         return group_labels
 
-    @org_info.command(name='моя-организация')
+    @org_info.command(name='моя-организация', description="Узнать информацию о вашей организации")
     @BasicCog.character_required
     async def __org_main_info(self, ctx, character_id:int=None):
         from ArbOrgs import Organization
@@ -3078,7 +3585,7 @@ class CharacterOrganization(BasicCog):
         await view.update_button()
         await ctx.respond(embed=main_embed, view=view)
 
-    @org_mng.command(name='пригласить-в-организацию')
+    @org_mng.command(name='пригласить-в-организацию', description="Пригласить персонажа в вашу организацию")
     @BasicCog.character_required
     async def __org_join(self, ctx,
                          user: discord.Option(discord.SlashCommandOptionType.user, required=True),
@@ -3129,7 +3636,7 @@ class CharacterOrganization(BasicCog):
             embed = ErrorEmbed('Приглашение', f'-# *Приглашение в организацию **{org.label}** отклонено*')
             await ctx.send(embed=embed)
 
-    @org_mng.command(name='повысить')
+    @org_mng.command(name='повысить', description="Повысить или понизить персонажа в должности")
     @BasicCog.character_required
     async def __org_promote(self, ctx,
                             rank:discord.Option(str, autocomplete=discord.utils.basic_autocomplete(ranks)),
@@ -3152,7 +3659,7 @@ class CharacterOrganization(BasicCog):
             await ctx.respond(embed=embed)
             return
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         org = Organization(org_id, data_manager=db)
 
         member = Character(member_id, data_manager=db)
@@ -3192,7 +3699,7 @@ class CharacterOrganization(BasicCog):
                 await member_user.send(embed=embed)
 
 
-    @org_mng.command(name='зарплата')
+    @org_mng.command(name='зарплата', description="Выплатить зарплату всей организации из бюджета организации")
     @BasicCog.character_required
     async def __org_payday(self, ctx, stake:discord.Option(int, min_value=10, max_value=200, default=100, required=False),
                            character_id:int=None):
@@ -3231,7 +3738,7 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @org_mng.command(name='уволить')
+    @org_mng.command(name='уволить', description="Уволить персонажа из организации")
     @BasicCog.character_required
     async def __org_fire(self, ctx, member: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(org_members)),
                           character_id:int=None):
@@ -3252,7 +3759,7 @@ class CharacterOrganization(BasicCog):
             await ctx.respond(embed=embed)
             return
 
-        db = DataManager()
+        db = DEFAULT_MANAGER
         org = Organization(org_id, data_manager=db)
 
         member = Character(member_id, data_manager=db)
@@ -3275,7 +3782,7 @@ class CharacterOrganization(BasicCog):
         db.update('CHARS_INIT', {'org_lvl': None, 'org': None}, f'id = {member_id}')
 
 
-    @org_mng.command(name='управлять-бюджетом')
+    @org_mng.command(name='управлять-бюджетом', description="Внести/Снять деньги из бюджета организации")
     @BasicCog.character_required
     async def __org_manage_budget(self, ctx, amount: discord.Option(int, required=True),
                                   character_id:int=None):
@@ -3321,7 +3828,7 @@ class CharacterOrganization(BasicCog):
                 await ctx.respond(embed=embed)
                 return
 
-    @org_info.command(name='дипломатия-организации')
+    @org_info.command(name='дипломатия-организации', description="Узнать отношение вашей организации с другими фракциями")
     @BasicCog.character_required
     async def __org_relations(self, ctx,
                                     character_id:int=None):
@@ -3344,7 +3851,7 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=main_embed)
 
-    @org_group.command(name='сформировать-отряд')
+    @org_group.command(name='сформировать-отряд', description="Сформировать отряд от лица организации")
     @BasicCog.character_required
     async def __form_group(self, ctx,
                            label:discord.Option(str),
@@ -3377,7 +3884,7 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @org_group.command(name='добавить-в-отряд')
+    @org_group.command(name='добавить-в-отряд', description="Добавить персонажа вашей организации в один из отрядов")
     @BasicCog.character_required
     async def __org_add_group_member(self, ctx,
                                      group: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_org_groups)),
@@ -3417,7 +3924,7 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @org_mng.command(name='назначить-позывной')
+    @org_mng.command(name='назначить-позывной', description="Назначить персонажу организации позывной")
     @BasicCog.character_required
     async def __org_set_nickname(self, ctx,
                                  member: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(org_members)),
@@ -3451,7 +3958,7 @@ class CharacterOrganization(BasicCog):
                              footer_logo=Character(character_id).picture)
         await ctx.respond(embed=embed)
 
-    @org_group.command(name='изгнать-из-отряда')
+    @org_group.command(name='изгнать-из-отряда', description="Выгнать из отряда персонажа от лица организации")
     @BasicCog.character_required
     async def __org_remove_group_member(self, ctx, group: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_org_groups)),
                                      member: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(group_members)),
@@ -3487,7 +3994,7 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=embed)
 
-    @org_group.command(name='расформировать-отряд')
+    @org_group.command(name='расформировать-отряд', description="Расформировать отряд от лица организации")
     @BasicCog.character_required
     async def __org_disband_group(self, ctx,
                                   group: discord.Option(str, autocomplete=discord.utils.basic_autocomplete(get_org_groups)),
@@ -3524,8 +4031,62 @@ class CharacterOrganization(BasicCog):
 
         await ctx.respond(embed=embed)
 
+    @org_mng.command(name='установить-новостной-чат')
+    @BasicCog.character_required
+    async def __org_set_news_channel(self, ctx, channel: discord.TextChannel,
+                                     character_id:int=None):
+        from ArbOrgs import Organization, Rank
 
+        character = Character(character_id)
+        org_id = character.org
+        if not org_id:
+            embed = ArbEmbed('Организация отсутствует',
+                             f'-# *Персонаж {character.name} не является членом какой-либо организации*')
+            await ctx.respond(embed=embed)
+            return
 
+        org = Organization(org_id)
+
+        rank_id = character.org_lvl
+
+        if not Rank(rank_id).is_leader:
+            embed = ErrorEmbed('Недостаточно полномочий', f'-# *У Вас недостаточно полномочий для установки новостного чата организации*')
+            await ctx.respond(embed=embed)
+            return
+
+        org.set_news_channel(channel.id)
+        embed = SuccessEmbed(f'Установка новостного чата | {org.label}',
+                             f'*Новостной чат организации **{org.label}** был успешно установлен на канал **{channel.name}**.*')
+        embed.set_author(character.name, icon_url=character.picture)
+        await ctx.respond(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Обработка сообщений в боевых каналах/потоках
+        if message.author.bot:
+            return
+
+        channel_id = message.channel.id
+        org_channel = Organization.get_org_of_channel(channel_id)
+        if org_channel is not None:
+            ctx: discord.ext.commands.Context = await self.bot.get_context(message)
+            message_pictures = message.attachments
+
+            if not message_pictures:
+                picture = None
+            else:
+                archive_channel = ctx.bot.get_channel(1248998863730380834)
+                file = await message_pictures[0].to_file()
+                new_pictures: discord.Message = await archive_channel.send(file=file)
+                picture = new_pictures.attachments[0].url
+
+            embed = ArbEmbed(f'{org_channel.label} | Новости',
+                             f'{message.content}',
+                             footer=f'Руководство {org_channel.label}',
+                             footer_logo=org_channel.picture,
+                             picture=picture)
+            await ctx.send(f'@here', embed=embed)
+            await message.delete()
 
 
 

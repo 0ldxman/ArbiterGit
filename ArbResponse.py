@@ -215,3 +215,67 @@ class Notification(DataModel):
             Notification.create_notification(response.title, response.content, None, type='info')
 
 
+@dataclass()
+class Event:
+    title: str
+    content: str
+    icon: str | None
+    status: int
+    author: str | None
+    author_logo: str | None
+
+    @property
+    def label(self):
+        if self.icon:
+            return f'{self.title} {self.icon}'
+        else:
+            return self.title
+
+    def embed(self):
+        if self.status >= 50:
+            return SuccessEmbed(self.label, f'> {self.content}', footer=self.author, footer_logo=self.author_logo)
+        elif self.status <= -50:
+            return ErrorEmbed(self.label, f'> {self.content}', footer=self.author, footer_logo=self.author_logo)
+        else:
+            return ArbEmbed(self.label, f'> {self.content}', footer=self.author, footer_logo=self.author_logo)
+
+
+class EventLog:
+    def __init__(self, events: list[Event] = None):
+        self.events: list[Event] = events if events else []
+
+    def add_event(self, title:str, content:str, icon:str=':warning:', status:int = 0, author:str = None, author_logo:str = None):
+        self.events.append(Event(title, content, icon, status, author, author_logo))
+
+    @property
+    def embeds(self):
+        from ArbUtils.ArbDataParser import ListChunker
+        from ArbUIUX import HealthEmbed
+
+        current_failure = 0
+        for event in self.events:
+            current_failure += event.status
+        total_failure = int((current_failure / len(self.events)) * 100)
+
+        chunks = ListChunker(5, self.events)
+        embeds = []
+        for chunk in chunks:
+            content = ''
+            for e in chunk:
+                content += f'\n{e.label}\n> {e.content}\n'
+            embed = HealthEmbed('События', content, total_failure)
+            embeds.append(embed)
+
+        return embeds
+
+    async def view(self, ctx):
+        embeds = self.embeds
+        view = Paginator(embeds, ctx)
+        await view.update_button()
+        await ctx.respond(embed=embeds[0], view=view)
+
+
+
+
+
+

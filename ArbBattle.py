@@ -372,6 +372,9 @@ class BattleTeam(DataModel):
         team = db.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor_id}')
         dead_team = db.select_dict('BATTLE_DEAD', filter=f'character_id = {actor_id}')
 
+        if not team or dead_team:
+            return None
+
         if team:
             if not team[0].get('team_id'):
                 return None
@@ -1030,7 +1033,7 @@ class Raid(BattleType):
 class Capture(BattleType):
     def find_winner(self) -> list[int] | None:
         teams_scores = self.get_teams_winpoints()
-        max_score = max(teams_scores.values())
+        max_score = max(teams_scores.values()) if teams_scores else 0
 
         max_score_teams = 0
         for team, score in teams_scores.items():
@@ -1214,7 +1217,7 @@ class Layer(DataModel):
     def generate_objects(self, value:int=random.randint(3, 20)):
         from ArbGenerator import GenerateObject, GenerateLayer
 
-        generated_objects: list[GenerateObject] = GenerateLayer(self.id, self.battle_id, self.terrain.id, self.height, data_manager=self.data_manager, object_value=value).objects
+        generated_objects: list[GenerateObject] = GenerateLayer(self.id, self.battle_id, self.terrain.id, data_manager=self.data_manager, object_value=value).objects
         for object in generated_objects:
             object.insert_data()
 
@@ -1373,6 +1376,19 @@ class Battlefield(DataModel):
             return []
         else:
             return [c.get('character_id') for c in self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'battle_id = {self.battle_id}')]
+
+    def fetch_dead_actors(self) -> list[int]:
+        """
+        Возвращает список идентификаторов всех мертвых персонажей на поле боя
+
+        :return: list[int]
+        """
+
+        if self.data_manager.check('BATTLE_DEAD', f'battle_id = {self.battle_id}') is None:
+            return []
+        else:
+            return [c.get('character_id') for c in self.data_manager.select_dict('BATTLE_DEAD', filter=f'battle_id = {self.battle_id}')]
+
 
     def add_actor(self, actor_id: int, **kwargs) -> None:
         """
@@ -1575,14 +1591,15 @@ class Battlefield(DataModel):
         return True
 
     def end_battle(self) -> ResponsePool:
+        from ArbCharacters import CharacterProgress
         """
                 Финальный скрипт окончания боя.
                 Выдаёт полученный за бой опыт персонажам.
                 Удаляет всю информацию о битве (заканчивает битву)
                 Добавляет персонажам информацию о произошедших событиях (смертях, победе/поражении)
 
-                :return: ResponsePool - Информация о завершении боя (победители, проигравшие, потери)
-                """
+                :return: ResponsePool - Информация о завершении боя (победители, проигравшие, потери)"""
+
         # TODO: Добавить удаление битвы
         # TODO: Записывание в память персонажа информацию о погибших и о победе/поражении
 
@@ -1618,6 +1635,26 @@ class Battlefield(DataModel):
 
                 ending_text += f'- *{prefix}Поражение {team_obj.label}*\n'
             ending_text += f'-# *Потери: {team_obj.count_casulties()}*\n-# *Выжившие: {team_obj.count_participants()}*\n\n'
+
+        actors = self.fetch_actors()
+        dead_actors = self.fetch_dead_actors()
+        for actor in actors:
+            actor_kills = self.data_manager.get_count('BATTLE_DEAD', 'character_id', f'killer = {actor}')
+            actor_team_id = self.data_manager.select_dict('BATTLE_CHARACTERS', filter=f'character_id = {actor}')[0].get('team_id')
+            exp = actor_kills * 500
+            exp += 2000 if actor_team_id in winners else 1000
+            CharacterProgress(actor, data_manager=self.data_manager).update_progress_data(exp=exp)
+            APManager(actor, data_manager=self.data_manager).clear_ap()
+
+        for actor in dead_actors:
+            actor_kills = self.data_manager.get_count('BATTLE_DEAD', 'character_id', f'killer = {actor}')
+            actor_team_id = self.data_manager.select_dict('BATTLE_DEAD', filter=f'character_id = {actor}')[0].get('team_id')
+            exp = actor_kills * 500
+            exp += 1500 if actor_team_id in winners else 800
+            CharacterProgress(actor, data_manager=self.data_manager).update_progress_data(exp=exp)
+            APManager(actor, data_manager=self.data_manager).clear_ap()
+
+        self.delete_battle()
 
         return ResponsePool(Response(True, ending_text, f'Конец {self.label} ({self.get_battle_type_label()})'))
 
@@ -1704,10 +1741,7 @@ class Battlefield(DataModel):
             return False
 
     def create_team(self, label: str, role: str = None) -> BattleTeam:
-        if not self.data_manager.check('BATTLE_TEAMS', 'battle_id'):
-            c_id = 0
-        else:
-            c_id = self.data_manager.maxValue('BATTLE_TEAMS', 'team_id', f'battle_id = {self.battle_id}') + 1
+        c_id = self.data_manager.maxValue('BATTLE_TEAMS', 'team_id') + 1
 
         query = {'battle_id': self.battle_id,
                  'team_id': c_id,
@@ -1941,9 +1975,11 @@ class DamageManager:
 
     def target_random_element(self, target_id:int, *, body_group:str = None) -> BodyElement:
         target_body = Body(target_id, data_manager=self.data_manager)
-        body_group = body_group if body_group is not None else random.choice(target_body.all_bodyparts_groups())
-        print(body_group)
-        return target_body.choose_random_element_from_group(body_group)
+        #body_group = body_group if body_group is not None else target_body.get_main_group()
+
+        main_element = target_body.get_main_part()
+
+        return main_element.select_random_body_part() if not body_group else target_body.choose_random_element_from_group(body_group)
 
     def get_target_armor(self, target_id:int):
         from ArbClothes import CharacterArmor
@@ -1962,6 +1998,8 @@ class DamageManager:
         total_damage = []
 
         current_element: BodyElement = self.target_random_element(target_id) if not kwargs.get('bodyelement') else BodyElement(target_id, kwargs.get('bodyelement'), data_manager=self.data_manager)
+        print('МЕСТО ПОПАДАНИЯ', current_element.label)
+
         armor = self.get_target_armor(target_id)
 
         for damage in damage_list:
@@ -2018,6 +2056,8 @@ class RangeAttack(Attack):
 
         enemy_cover_id = self.get_enemy_cover(target_id)
         enemy_cover = GameObject(enemy_cover_id, data_manager=self.data_manager).current_protection if enemy_cover_id else 0
+        print('УКРЫТИЕ ПРОТИВНИКА:', enemy_cover)
+        print(self.attacker.layer_id, target_id)
         distance_to_enemy = self.attacker.calculate_total_distance(target_id)
 
         shot_difficulty = weapon.shot_difficulty(distance_to_enemy, enemy_cover)
@@ -2032,6 +2072,9 @@ class RangeAttack(Attack):
             print('attacker', self.attacker.actor_id)
             roll = self.check_skill(weapon.weapon_class, shot_difficulty)
             if not roll[0]:
+                if enemy_cover_id:
+                    raw_damage = weapon.fire()
+                    GameObject(enemy_cover_id, data_manager=self.data_manager).recive_damage(sum(map(lambda d: d.damage, raw_damage)))
                 continue
 
             raw_damage = weapon.fire()
@@ -2077,6 +2120,10 @@ class MeleeAttack(Attack):
         if not melee_attacks:
             return Response(False, 'У вас нет оружия для атак в ближнем бою!', 'Атака в ближнем бою невозможна')
 
+        armor_force = self.attacker.get_capacity_or_armor_skill('Force')
+        damage_bonus = armor_force / 4
+        penetration_bonus = 1 + armor_force / 100
+
         for _ in range(melee_attacks):
             self.attacker.make_sound('Fight', weapon.melee_noise())
 
@@ -2084,7 +2131,7 @@ class MeleeAttack(Attack):
             if not roll[0]:
                 continue
 
-            raw_damage = weapon.melee_attack()
+            raw_damage = weapon.melee_attack(damage_bonus=damage_bonus, penetration_bonus=penetration_bonus)
             n_damage = damage_manager.process_damage(target_id, raw_damage)
 
             if not n_damage:
@@ -2123,7 +2170,7 @@ class ThrowGrenade(Attack):
         return self.attacker.get_battle().distance_delta
 
     def attack(self, target_id: int) -> Response:
-        damage_manager = DamageManager()
+        damage_manager = DamageManager(data_manager=self.data_manager)
         grenade = self.get_grenade()
 
         # enemy_cover_id = self.get_enemy_cover(target_id)
@@ -2131,26 +2178,27 @@ class ThrowGrenade(Attack):
 
         total_damage = []
 
-        damaged_layers = grenade.get_damaged_layers(self.distance_delta(), self.get_enemy_layer(target_id))
+        damaged_layers = grenade.get_damaged_layers(self.distance_delta(), target_id)
         damage_dict = grenade.detonate()
         grenade.delete_item()
         self.attacker.make_sound('Explosion', 100)
 
         main_damage = damage_dict.get('main_damage', [])
 
-        main_target_damage = damage_manager.process_damage(target_id, main_damage)
-        is_target_dead = ActorDeath(target_id, self.attacker.actor_id, reason=f'Взорван {grenade.label}', data_manager=self.data_manager).check_death()
-
         fragments_damage = damage_dict.get('fragments_damage', [])
         fragments_value = damage_dict.get('fragments_value', 0)
 
         for layer in damaged_layers:
-            potential_targets = self.get_characters_without_cover(layer)
-            if self.get_enemy_layer(target_id) == layer:
-                potential_targets.append(target_id)
+            potential_targets = Layer(layer, self.attacker.battle_id, data_manager=self.data_manager).get_all_characters_on_layer()
+
+            if not potential_targets:
+                continue
+
             for _ in range(fragments_value):
                 if random.randint(0, 100) > 50:
+                    fragments_value -= 1
                     frag_target = random.choice(potential_targets)
+                    StatusManager.clear_all_statuses(frag_target)
                     frag = random.choice(fragments_damage)
                     frag_damage = damage_manager.process_damage(frag_target, [frag])
 
@@ -2160,7 +2208,31 @@ class ThrowGrenade(Attack):
                 else:
                     continue
 
-        total_damage.append(main_target_damage)
+            if self.attacker.actor_id in potential_targets:
+                potential_targets.remove(self.attacker.actor_id)
+
+            if layer != target_id or not potential_targets:
+                continue
+            else:
+                if not main_damage:
+                    continue
+
+                main_target = random.choice(potential_targets)
+
+                object_id = Actor(main_target, data_manager=self.data_manager).object_id
+                if object_id:
+                    total_main_targets = GameObject(object_id, data_manager=self.data_manager).current_characters()
+                    GameObject(object_id, data_manager=self.data_manager).recive_damage(random.randint(1, main_damage[0].damage))
+                else:
+                    total_main_targets = [main_target]
+
+                for target in total_main_targets:
+                    StatusManager.clear_all_statuses(target)
+                    main_target_damage = damage_manager.process_damage(target, main_damage)
+
+                    ActorDeath(main_target, self.attacker.actor_id, reason=f'Погиб от взрыва {grenade.label}', data_manager=self.data_manager).check_death()
+
+                    total_damage.append(main_target_damage)
 
         total_response = '\n'.join(f'- {response}' for response in total_damage)
 
@@ -2224,6 +2296,7 @@ class BodyPartAttack(Attack):
         else:
             armor_force = self.attacker.get_capacity_or_armor_skill('Force')
             damage_bonus = armor_force / 4
+            penetration_bonus = 1 + armor_force / 100
 
             for _ in range(attacks):
                 self.attacker.make_sound('Fight', random.randint(50, 150))
@@ -2231,7 +2304,7 @@ class BodyPartAttack(Attack):
                 if not roll[0]:
                     continue
 
-                raw_damage = attack.attack(damage_bonus=damage_bonus)
+                raw_damage = attack.attack(damage_bonus=damage_bonus, penetration_bonus=penetration_bonus)
                 n_damage = damage_manager.process_damage(target_id, raw_damage)
 
                 if not n_damage:
@@ -2281,21 +2354,36 @@ class ActorSounds:
         else:
             return True
 
-    def string_sounds(self) -> list[str]:
+    def get_available_sounds(self) -> list[int]:
         sounds = [sound for sound in self.get_all_current_sounds() if self.check_sound_availability(sound)]
-        total_text = []
+        return sounds
 
-        if not sounds:
-            total_text.append(f'-# *(Здесь будут отображаться звуки боя доступные для обнаружения)*')
+    def string_sounds(self) -> list[str]:
+        actor_team = self.actor.get_team()
+        total_members = []
+
+        if actor_team:
+            total_members.append(actor_team.fetch_members())
+            total_members.append(actor_team.get_dead_members())
+        else:
+            total_members = [self.actor.actor_id]
+
+        sounds = self.get_available_sounds()
+        total_text = []
 
         for sound in sounds:
             sound_obj = InBattleSound(sound, data_manager=self.data_manager)
+            if sound_obj.actor_id in total_members:
+                continue
             sound_text = f'''
 **{sound_obj.label}** ||**( ID: {sound_obj.id} )**||
 - *Шанс обнаружения источника: **{self.detection_chance(sound_obj.id):.2f}%***
 -# > — "{sound_obj.content if sound_obj.content else sound_obj.description}"
 '''
             total_text.append(f'{sound_text}\n')
+
+        if not total_text:
+            total_text.append(f'-# *(Здесь будут отображаться звуки боя доступные для обнаружения)*')
 
         return total_text
 
@@ -2525,13 +2613,13 @@ class ActorVision:
         return total_bodies
 
     def process_actor_vigilance(self, actor_id:int):
+        from ArbCharacters import Character
 
-        actor = Actor(actor_id, data_manager=self.data_manager)
         team_members = self.actor.get_team().get_dead_members() + self.actor.get_team().fetch_members()
-        if actor.actor_id in team_members:
-            return f'**{actor.get_character().name}**'
+        if actor_id in team_members:
+            return f'**{Character(actor_id, data_manager=self.data_manager).name}**'
         else:
-            return f'||Неизвестный {actor.get_character().race.label.lower()} ({actor_id})||'
+            return f'||Неизвестный {Character(actor_id, data_manager=self.data_manager).race.label.lower()} ({actor_id})||'
 
     def string_vigilance(self):
         visible_characters = self.get_visible_characters()
@@ -2861,6 +2949,7 @@ class ActorMovement:
                 return log.log
 
         self.actor.status().clear_melees(self.actor.actor_id)
+        self.actor.status().clear_melee_target(self.actor.actor_id)
 
         log.action('Ближний бой', 'Вам удаётся отбиться от противника и сбежать из ближнего боя!', RespondIcon.success())
 
@@ -2966,7 +3055,7 @@ class ActorDeath:
     def check_death(self):
         body = Body(self.target, data_manager=self.data_manager)
         if body.is_dead()[0]:
-            Notification.create_notification('Смерть', f'Персонаж {Actor(self.target).get_character().name} погиб{f"от рук {Actor.get_actor_character(self.killer).name}" if self.killer else ""}...\n-# Причина смерти: {self.reason}', self.target, type='danger')
+            Notification.create_notification('Смерть', f'Персонаж {Actor(self.target).get_character().name} погиб{f" от рук {Actor.get_actor_character(self.killer).name}" if self.killer else ""}...\n-# Причина смерти: {self.reason}', self.target, type='danger')
             Actor(self.target, data_manager=self.data_manager).die(self.killer, self.reason)
             return True
         else:
@@ -3158,7 +3247,7 @@ class Actor(DataModel):
         else:
             return [grenade.item_id for grenade in grenades if grenade.item_id == grenade_id]
 
-    def get_race_attacks(self, race_attack: str) -> list:
+    def get_race_attacks(self, race_attack: str=None) -> list:
         body = self.get_body().get_race_attacks()
         if race_attack and race_attack in body:
             return [race_attack]
@@ -3328,7 +3417,7 @@ class Actor(DataModel):
         log = self.AM()
         weapon = self.get_weapon()
 
-        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['SR', 'AR', 'PST', 'TUR']:
+        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['SR', 'AR', 'PST', 'TUR', 'SMG']:
             log.action('Невозможно охотиться', f'У вас нет оружия дальнего боя подходящего для охоты на противника или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.info())
             return log
 
@@ -3353,7 +3442,7 @@ class Actor(DataModel):
 
         weapon = self.get_weapon()
 
-        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR']:
+        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR', 'SMG']:
             log.action('Невозможно подавлять', f'У вас нет оружия дальнего боя подходящего для подавления укрытия или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.failure())
             return log
 
@@ -3377,7 +3466,7 @@ class Actor(DataModel):
         log = self.AM()
         weapon = self.get_weapon()
 
-        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR']:
+        if not weapon or Weapon(weapon.item_id, data_manager=self.data_manager).weapon_class not in ['MG', 'AR', 'TUR', 'SMG']:
             log.action('Невозможно сдерживать', f'У вас нет оружия дальнего боя подходящего для сдерживания слоя или ваши конечности слишком повреждены чтобы стрелять', RespondIcon.info())
             return log
 
@@ -3482,10 +3571,11 @@ class Actor(DataModel):
         self.clear_tactical_status()
         self.clear_targets()
 
-        self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {self.actor_id}')
+        enemy_cover_id = Actor(target_id, data_manager=self.data_manager).object_id
+
+        self.data_manager.update('BATTLE_CHARACTERS', {'object': enemy_cover_id}, f'character_id = {self.actor_id}')
         self.data_manager.update('CHARS_COMBAT', {'melee_target': target_id}, f'id = {self.actor_id}')
         Actor(target_id, data_manager=self.data_manager).clear_tactical_status()
-        self.data_manager.update('BATTLE_CHARACTERS', {'object': None}, f'character_id = {target_id}')
         self.data_manager.update('CHARS_COMBAT', {'melee_target': self.actor_id}, f'id = {target_id}')
 
         log.action('Ближний бой',f'{self.get_character().name} сближается с ``{self.get_actor_character(target_id).name}`` и навзяывает ему ближний бой', RespondIcon.success())
@@ -3579,6 +3669,8 @@ class Actor(DataModel):
 
         if attack_result:
             log.action('Стрельба', f'Вы открываете огонь из {weapon.label} по ``{Actor.get_actor_character(enemy_id).name}``!', RespondIcon.success())
+            StatusManager.clear_hunt(enemy_id)
+            StatusManager.clear_suppress(enemy_id)
         else:
             log.action('Неудачная стрельба',
                        f'Вы открываете огонь из {weapon.label} по ``{Actor.get_actor_character(enemy_id).name}``, но она не увенчалась успехом',
@@ -3715,7 +3807,7 @@ class Actor(DataModel):
         grenade_item = Item(grenade, data_manager=self.data_manager)
         attack_result = ThrowGrenade(self, grenade, data_manager=self.data_manager).attack(enemy_id)
 
-        log.action('Бросок гранаты', f'{self.get_character().name} бросает {grenade_item.label} на позицию ``{Actor.get_actor_character(enemy_id).name}``!', RespondIcon.success())
+        log.action('Бросок гранаты', f'{self.get_character().name} бросает {grenade_item.label} на позицию ``{Layer(enemy_id, self.battle_id, data_manager=self.data_manager)}``!', RespondIcon.success())
 
         if self.is_enemy_dead(enemy_id):
             log.log.response_to_respond(self.respond_if_enemy_dead())
@@ -3842,6 +3934,10 @@ class APManager:
         self.check_record()
         return self.data_manager.select_dict('CHARS_COMBAT', filter=f'id = {self.actor_id}')[0]
 
+    def clear_ap(self):
+        self.ap = 0
+        self.ap_bonus = 0
+        self.data_manager.update('CHARS_COMBAT', {'ap': 0, 'ap_bonus': 0}, f'id = {self.actor_id}')
 
 
 

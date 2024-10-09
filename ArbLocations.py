@@ -1,6 +1,7 @@
+import datetime
 import random
 
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataManager, DataModel, DEFAULT_MANAGER, DataObject, EID
 from dataclasses import dataclass
 from ArbUtils.ArbNums import specnum
 import heapq
@@ -11,6 +12,8 @@ from ArbGenerator import GenerateBattle
 from ArbUtils.ArbTimedate import TimeManager
 from ArbUtils.ArbDataParser import process_string
 import networkx as nx
+from ArbOrgs import Organization
+from typing import Union
 
 
 # class GraphBuilder:
@@ -104,17 +107,33 @@ import networkx as nx
 #         return cost, path_with_trails
 
 
-class LocationObjectType(DataModel):
+class LocationObjectType(DataObject):
     def __init__(self, id:str, **kwargs):
         self.type_id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        DataModel.__init__(self, 'LOC_OBJECTS_INIT', f'id = "{self.type_id}"', data_manager=self.data_manager)
+        DataObject.__init__(self, 'LOC_OBJECTS_INIT', EID(id=self.type_id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label') if self.get('label') else 'Неизвестный объект'
-        self.type = self.get('type') if self.get('type') else None
-        self.value = self.get('value') if self.get('value') else None
-        self.difficulty = self.get('difficulty') if self.get('difficulty') else 0
+        self._label = self.field('label', 'Неизвестный объект')
+        self._type = self.field('type', None)
+        self._value = self.field('value', None)
+        self._difficulty = self.field('difficulty', 0)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def type(self) -> str:
+        return self._type.load(self.data_manager)
+
+    @property
+    def value(self) -> Union[int, float, str]:
+        return self._value.load(self.data_manager)
+
+    @property
+    def difficulty(self) -> int:
+        return self._difficulty.load(self.data_manager)
+
 
     def __repr__(self):
         return f'Object.{self.type_id}({self.type})'
@@ -123,13 +142,13 @@ class LocationObjectType(DataModel):
 class LocationObject(LocationObjectType):
     def __init__(self, id:int, **kwargs):
         self.object_id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.data_manager = kwargs.get('data_manager', DEFAULT_MANAGER)
         data = self.fetch_data()
         self.object_type = data.get('type') if data.get('type') else 'Cache'
 
         super().__init__(self.object_type, data_manager=self.data_manager)
         self.location = data.get('id') if data.get('id') else None
-        self.label = data.get('label') if data.get('label') else self.label
+        self.custom_label = data.get('label') if data.get('label') else self.label
 
     def fetch_data(self):
         if self.data_manager.check('LOC_OBJECTS',filter=f'object_id = {self.object_id}'):
@@ -147,29 +166,98 @@ class LocationObject(LocationObjectType):
             return None
 
 
-class LocationType(DataModel):
+class LocationType(DataObject):
     def __init__(self, id:str, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        DataModel.__init__(self, 'LOC_TYPE', key_filter=f'id = "{self.id}"', data_manager=self.data_manager)
+        DataObject.__init__(self, 'LOC_TYPE', EID(id=self.id), data_manager=kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label') if self.get('label') else 'Неизвестный тип локации'
-        self.rest = self.get('rest') if self.get('rest') else None
-        self.medicine = self.get('medicine') if self.get('medicine') else None
-        self.terrain = self.get('terrain') if self.get('terrain') else None
-        self.terrain_category = process_string(self.get('terrain_category')) if self.get('terrain_category', None) else None
-        self.min_layers = self.get('min_layers') if self.get('min_layers') else 1
-        self.max_layers = self.get('max_layers') if self.get('max_layers') else 1
-        self.min_distance = self.get('min_distance') if self.get('min_distance') else 20
-        self.max_distance = self.get('max_distance') if self.get('max_distance') else 100
+        self._label = self.field('label', 'Неизвестный тип локации')
+        self._rest = self.field('rest', 0)
+        self._medicine = self.field('medicine', 0)
+        self._terrain = self.field('terrain', None)
+        self._terrain_category = self.field('terrain_category', None)
+        self._min_layers = self.field('min_layers', 1)
+        self._max_layers = self.field('max_layers', 1)
+        self._min_distance = self.field('min_distance', 20)
+        self._max_distance = self.field('max_distance', 100)
 
-        self.patrol = self.get('patrol') if self.get('patrol') else None
-        self.trader = self.get('trader') if self.get('trader') else None
-        self.intendant = self.get('intendant') if self.get('intendant') else None
-        self.healer = self.get('healer') if self.get('healer') else None
+        self._patrol = self.field('patrol', None)
+        self._trader = self.field('trader', None)
+        self._intendant = self.field('intendant', None)
+        self._healer = self.field('healer', None)
 
-        self.is_covered = bool(self.get('is_covered')) if self.get('is_covered') else False
+        self._is_covered = self.field('is_covered', 0)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def rest(self) -> int:
+        return self._rest.load(self.data_manager)
+
+    @property
+    def medicine(self) -> int:
+        return self._medicine.load(self.data_manager)
+
+    @property
+    def terrain(self) -> str:
+        return self._terrain.load(self.data_manager)
+
+    @property
+    def terrain_category(self) -> list[str]:
+        terrains = self._terrain_category.load(self.data_manager)
+        if terrains:
+            return process_string(terrains)
+
+    @property
+    def min_layers(self) -> int:
+        layers = self._min_layers.load(self.data_manager)
+        if layers < 1:
+            return 1
+        return layers
+
+    @property
+    def max_layers(self) -> int:
+        layers = self._max_layers.load(self.data_manager)
+        if layers < self.min_layers:
+            return self.min_layers
+        return layers
+
+    @property
+    def min_distance(self) -> int:
+        distance = self._min_distance.load(self.data_manager)
+        if distance < 1:
+            return 1
+        return distance
+
+    @property
+    def max_distance(self) -> int:
+        distance = self._max_distance.load(self.data_manager)
+        if distance < self.min_distance:
+            return self.min_distance
+        return distance
+
+    @property
+    def patrol(self) -> str:
+        return self._patrol.load(self.data_manager)
+
+    @property
+    def trader(self) -> str:
+        return self._trader.load(self.data_manager)
+
+    @property
+    def intendant(self) -> str:
+        return self._intendant.load(self.data_manager)
+
+    @property
+    def healer(self) -> str:
+        return self._healer.load(self.data_manager)
+
+    @property
+    def is_covered(self) -> bool:
+        return bool(self._is_covered.load(self.data_manager))
 
     def fetch_type_objects(self):
         total_objects = []
@@ -188,23 +276,99 @@ class LocationType(DataModel):
         return f'LocationType.{self.id}'
 
 
-class Location(DataModel):
+class Location(DataObject):
     def __init__(self, id:str, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        DataModel.__init__(self, 'LOC_INIT', f'id = "{self.id}"', data_manager=self.data_manager)
+        DataObject.__init__(self, 'LOC_INIT', EID(id = self.id), kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        self.label = self.get('label') if self.get('label') else 'Неизвестное место'
-        self.type = LocationType(self.get('type'), data_manager=self.data_manager) if self.get('type') else None
-        self.cluster = Cluster(self.get('region'), data_manager=self.data_manager) if self.get('region') else None
-        self.owner = self.get('owner') if self.get('owner') else None
-        self.cost = int(self.get('cost')) if self.get('cost') else 0
-        print(self.__dict__)
-        self.picture = self.get('picture') if self.get('picture') else self.cluster.picture
+        self._label = self.field('label', 'Неизвестное место')
+        self._type = self.field('type', None)
+        self._cluster = self.field('region', None)
+        self._owner = self.field('owner', None)
+        self._cost = self.field('cost', 0)
+        self._picture = self.field('picture', None)
+        self._current_battle_id = self.field('current_battle', None)
+        self._is_covered = self.field('is_covered', None)
 
-        self.current_battle = self.get('current_battle') if self.get('current_battle') else None
-        self.is_covered = bool(self.get('is_covered')) if self.get('is_covered') is not None else self.type.is_covered
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @label.setter
+    def label(self, value: str):
+        self._label.save(self.data_manager, value)
+
+    @property
+    def type(self) -> Union[LocationType, None]:
+        type_id = self._type.load(self.data_manager)
+        if type_id:
+            return LocationType(type_id, data_manager=self.data_manager)
+        else:
+            return None
+
+    @type.setter
+    def type(self, value: str):
+        self._type.save(self.data_manager, value)
+
+    @property
+    def cluster(self) -> Union[None, 'Cluster']:
+        cluster_id = self._cluster.load(self.data_manager)
+        if cluster_id:
+            return Cluster(cluster_id, data_manager=self.data_manager)
+        else:
+            return None
+
+    @cluster.setter
+    def cluster(self, value: str):
+        self._cluster.save(self.data_manager, value)
+
+    @property
+    def owner(self) -> str:
+        return self._owner.load(self.data_manager)
+
+    @owner.setter
+    def owner(self, value: str):
+        self._owner.save(self.data_manager, value)
+
+    @property
+    def cost(self) -> int:
+        return self._cost.load(self.data_manager)
+
+    @cost.setter
+    def cost(self, value: int):
+        self._cost.save(self.data_manager, value)
+
+    @property
+    def picture(self) -> str:
+        picture_url = self._picture.load(self.data_manager)
+        if not picture_url:
+            return self.cluster.picture if self.cluster else None
+        return picture_url
+
+    @picture.setter
+    def picture(self, value: str):
+        self._picture.save(self.data_manager, value)
+
+    @property
+    def current_battle(self) -> int:
+        return self._current_battle_id.load(self.data_manager)
+
+    @current_battle.setter
+    def current_battle(self, value: int):
+        self._current_battle_id.save(self.data_manager, value)
+
+    @property
+    def is_covered(self) -> bool:
+        is_covered = self._is_covered.load(self.data_manager)
+        if is_covered is None:
+            return self.type.is_covered
+        else:
+            return bool(is_covered)
+
+    @is_covered.setter
+    def is_covered(self, value: bool):
+        self._is_covered.save(self.data_manager, int(value))
 
     def delete_location(self):
         self.data_manager.delete('LOC_INIT', filter=f'id = "{self.id}"')
@@ -224,8 +388,6 @@ class Location(DataModel):
         if not self.is_covered:
             return True
 
-        from ArbOrgs import Organization
-
         owner_org = self.get_owner()
         if not owner_org:
             owner_org = Organization('Civil', data_manager=self.data_manager)
@@ -235,10 +397,6 @@ class Location(DataModel):
             return True
         else:
             return False
-
-
-
-
 
     def get_connections(self):
         if self.data_manager.check('LOC_CONNECTIONS',filter=f'(loc_id = "{self.id}" OR con_id = "{self.id}") AND available = 1'):
@@ -262,19 +420,35 @@ class Location(DataModel):
         self.data_manager.delete('LOC_CONNECTIONS', filter=f'(loc_id = "{self.id}" AND con_id = "{loc_id}") OR (loc_id = "{loc_id}" AND con_id = "{self.id}")')
 
     def process_connections(self):
-        total_connections = self.get_connections()
+        total_connections = self.get_connections()  # Получаем список всех соединений
         connections = []
+
         for connection in total_connections:
+            # Проверяем, является ли id соединения текущей локацией или другой
             if connection.get('loc_id') == self.id:
-                connections.append(connection.get('con_id'))
+                con_id = connection.get('con_id')
             else:
-                connections.append(connection.get('loc_id'))
+                con_id = connection.get('loc_id')
 
-        connections = list(set(connections))
+            # Добавляем словарь для хранения id и транспорта
+            connections.append({
+                'loc_id': con_id,
+                'transport': connection.get('transport')  # Добавляем транспорт
+            })
 
-        connected_locations = [LocationConnection(con, Location(con, data_manager=self.data_manager).cost) for con in connections]
+        # Убираем дубликаты
+        unique_connections = {con['loc_id']: con for con in connections}.values()
+
+        # Создаем список соединений с добавлением транспорта
+        connected_locations = [
+            LocationConnection(con['loc_id'], Location(con['loc_id'], data_manager=self.data_manager).cost, con['transport']) for con in unique_connections
+        ]
 
         return connected_locations
+
+    def connected_location(self):
+        cons = self.process_connections()
+        return [con.loc_id for con in cons]
 
     def minimal_cost_connections(self):
         connections = self.process_connections()
@@ -386,34 +560,47 @@ class Location(DataModel):
         self.picture = picture if picture else self.picture
         self.is_covered = is_covered if is_covered is not None else self.is_covered
 
-        query = {
-            'label': self.label,
-            'type': self.type.id,
-            'region': self.cluster.id,
-            'owner': self.owner,
-            'cost': self.cost,
-            'current_battle': self.current_battle,
-            'picture': self.picture,
-            'is_covered': is_covered if is_covered is not None else self.get("is_covered", None)
-        }
 
-        self.data_manager.update('LOC_INIT', query, filter=f'id = "{self.id}"')
-
-
-class Cluster(DataModel):
+class Cluster(DataObject):
     def __init__(self, id:str, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+        DataObject.__init__(self, 'LOC_CLUSTER', EID(id=self.id), kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        DataModel.__init__(self, 'LOC_CLUSTER', f'id = "{self.id}"', data_manager=self.data_manager)
+        self._label = self.field('label', 'Неизвестный регион')
+        self._type = self.field('type', None)
+        self._picture = self.field('picture', None)
+        self._weather = self.field('weather', 'Sunny')
+        self._time = self.field('time', TimeManager().get_current_time_condition())
+        self._move_desc = self.field('move_desc', 'Вы переместились на локацию')
+        self._map = self.field('map', None)
 
-        self.label = self.get('label', 'Неизвестный регион') if self.get('label') else 'Неизвестный регион'
-        self.type = self.get('type', 'Квестовый') if self.get('type') else None
-        self.picture = self.get('picture', '') if self.get('picture') else ''
-        self.weather = self.get('weather', 'Sunny') if self.get('weather') else 'Sunny'
-        self.time = self.get('time', 'Day') if self.get('time') else TimeManager().get_current_time_condition()
-        self.move_desc = self.get('move_desc', 'Вы переместились на локацию') if self.get('move_desc') else 'Вы перестились на локацию'
-        self.map = self.get('map', '') if self.get('map') else ''
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def type(self) -> Union[str, None]:
+        return self._type.load(self.data_manager)
+
+    @property
+    def picture(self) -> Union[str, None]:
+        return self._picture.load(self.data_manager)
+
+    @property
+    def weather(self) -> str:
+        return self._weather.load(self.data_manager)
+
+    @property
+    def time(self) -> str:
+        return self._time.load(self.data_manager)
+
+    @property
+    def move_desc(self) -> str:
+        return self._move_desc.load(self.data_manager)
+
+    @property
+    def map(self) -> str:
+        return self._map.load(self.data_manager)
 
     def fetch_locations(self):
         if self.data_manager.check('LOC_INIT',filter=f'region = "{self.id}"'):
@@ -462,7 +649,7 @@ class Cluster(DataModel):
         self.data_manager.delete('LOC_INIT', filter=f'region = "{self.id}"')
 
     def __repr__(self):
-        return f'Cluster.{self.id}'
+        return f'Region.{self.id}'
 
     @classmethod
     def create_cluster(cls, cluster_id:str, label:str, type:str, picture:str=None, weather:str='Sunny', time:str=None, move_desc:str='Вы переместились на локацию', map:str=None):
@@ -476,7 +663,7 @@ class Cluster(DataModel):
            'move_desc': move_desc,
             'map': map
         }
-        DataManager().insert('LOC_CLUSTER', query)
+        DEFAULT_MANAGER.insert('LOC_CLUSTER', query)
         return cls(cluster_id)
 
 
@@ -484,27 +671,70 @@ class Cluster(DataModel):
 class LocationConnection:
     loc_id: str | None
     cost: int | None
+    required_transport: str = None
+
+    def is_available(self, character_id:int):
+        return True
 
 
-class CharacterLocation(DataModel):
+class CharacterLocation(DataObject):
     def __init__(self, id:int, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+
+        DataObject.__init__(self, 'CHARS_LOC', EID(id=self.id), kwargs.get('data_manager', DEFAULT_MANAGER))
         self.insert_data_if_not_exists()
 
-        DataModel.__init__(self, f'CHARS_LOC', f'id = {self.id}', data_manager=self.data_manager)
+        self._location_id = self.field('loc_id', None)
+        self._move_points = self.field('move_points', 0)
+        self._entered = self.field('entered', 0)
 
-        self.location = Location(self.get('loc_id'), data_manager=self.data_manager) if self.get('loc_id') else None
-        self.movement_points = self.get('move_points') if self.get('move_points') else 0
-        self.entered_location = self.get('entered') == 1 if self.get('entered') else False
+    @property
+    def location_id(self) -> Union[str, None]:
+        return self._location_id.load(self.data_manager)
+
+    @location_id.setter
+    def location_id(self, new_location_id: Union[str, None]):
+        self._location_id.save(self.data_manager, new_location_id)
+
+    @property
+    def location(self) -> Union[Location, None]:
+        loc_id = self._location_id.load(self.data_manager)
+        if loc_id is None:
+            return None
+        return Location(loc_id, data_manager=self.data_manager)
+
+    @location.setter
+    def location(self, new_location: Union[str, Location, None]):
+        if isinstance(new_location, Location):
+            new_location = new_location.id
+
+        self._location_id.save(self.data_manager, new_location)
+
+    @property
+    def movement_points(self) -> int:
+        return self._move_points.load(self.data_manager)
+
+    @movement_points.setter
+    def movement_points(self, new_points: int):
+        self._move_points.save(self.data_manager, new_points)
+
+    @property
+    def entered_location(self) -> bool:
+        return self._entered.load(self.data_manager) == 1
+
+    @entered_location.setter
+    def entered_location(self, new_value: Union[bool, int]):
+        if isinstance(new_value, bool):
+            new_value = int(new_value)
+        self._entered.save(self.data_manager, new_value)
 
     def get_all_viewed_locations(self):
         all_locations = self.graph_all_locations()
-        filtered_locations = [loc for loc in all_locations if Location(loc).is_location_viewed(self.id)]
+        filtered_locations = [loc for loc in all_locations if Location(loc, data_manager=self.data_manager).is_location_viewed(self.id)]
         get_dislocation_connections = [loc.loc_id for loc in self.location.process_connections()]
         get_connections_connections = []
         for loc in get_dislocation_connections:
-            for con in Location(loc).process_connections():
+            for con in Location(loc, data_manager=self.data_manager).process_connections():
                 get_connections_connections.append(con.loc_id)
 
         total_locs = filtered_locations + get_dislocation_connections + get_connections_connections
@@ -520,8 +750,86 @@ class CharacterLocation(DataModel):
 
         return graph
 
+    def check_location_is_viewed(self, location_id:str):
+        if location_id in self.location.connected_location():
+            return True
+        loc = Location(location_id, data_manager=self.data_manager)
+        return loc.is_location_viewed(self.id)
+
+    def graph_linked_locations(self):
+        # Используем множество для отслеживания уже посещенных локаций
+        visited = set()
+
+        # Инициализируем граф с текущей локацией
+        graph = {self.location.id: self.location.process_connections()}
+
+        # Стек для обработки локаций
+        stack = [self.location.id]
+
+        # Добавляем начальную локацию в множество посещённых
+        visited.add(self.location.id)
+
+        while stack:
+            # Берем текущую локацию из стека
+            current_loc_id = stack.pop()
+
+            # Получаем все соединения для этой локации
+            connections = graph[current_loc_id]
+
+            for con in connections:
+                # Проверяем, если локация ещё не была посещена
+                if not con.is_available(self.id):
+                    continue
+
+                if con.loc_id not in visited:
+                    # Добавляем новую локацию в граф и стек
+                    graph[con.loc_id] = Location(con.loc_id, data_manager=self.data_manager).process_connections()
+
+                    # Добавляем в стек для дальнейшей обработки
+                    stack.append(con.loc_id)
+
+                    # Помечаем как посещённую
+                    visited.add(con.loc_id)
+
+        return graph
+
+    def get_viewed_locations(self, region_id: str = None):
+        total_locs = Cluster(region_id, data_manager=self.data_manager).fetch_locations() if region_id else self.data_manager.select_dict('LOC_INIT')
+        locs = [loc.get('id') for loc in total_locs]
+
+        start_time = datetime.datetime.now()
+
+        viewed_locations = []
+
+        # Кэшируем организации и их отношения
+        relations_cache = {}
+
+        for loc in locs:
+            location = Location(loc, data_manager=self.data_manager)
+
+            # Проверка, покрыта ли локация
+            if not location.is_covered:
+                viewed_locations.append(loc)
+                continue
+
+            owner_org = location.get_owner()
+
+            if not owner_org:
+                owner_org = Organization('Civil', data_manager=self.data_manager)
+
+            if owner_org.id not in relations_cache:
+                relations_cache[owner_org.id] = owner_org.relation_to_character(self.id)
+
+            # Если отношение больше 60, добавляем локацию в просмотренные
+            if relations_cache[owner_org.id] >= 60:
+                viewed_locations.append(loc)
+
+        print(datetime.datetime.now() - start_time)
+
+        return [loc for loc in viewed_locations]
+
     def create_graph(self):
-        graph = self.graph_all_locations()
+        graph = self.graph_linked_locations()
 
         G = nx.Graph()
         for node in graph:
@@ -538,8 +846,31 @@ class CharacterLocation(DataModel):
 
         return G
 
+    def create_only_viewed_graph(self):
+        viewed_locations = [loc for loc in self.get_viewed_locations()]
+        graph = self.graph_linked_locations()
+        viewed_graph = {loc: graph[loc] for loc in graph if loc in viewed_locations}
+
+        G = nx.Graph()
+        for node in viewed_graph:
+            node_label = Location(node, data_manager=self.data_manager).id
+            G.add_node(Location(node, data_manager=self.data_manager).id)
+            for edge in graph[node]:
+                linked_node = Location(edge.loc_id, data_manager=self.data_manager).id
+
+                distance = edge.cost
+                if linked_node not in G.nodes:
+                    G.add_node(linked_node)
+                if (node, linked_node, {'weight': distance}) not in G.edges:
+                    G.add_edge(node_label, linked_node, weight=distance)
+
+        print(viewed_graph)
+
+        return G
+
     def find_shortest_path(self, loc_id:str):
-        graph = self.create_graph()
+        graph = self.create_only_viewed_graph()
+        print(graph)
         source = self.location.id
         target = Location(loc_id, data_manager=self.data_manager).id
 

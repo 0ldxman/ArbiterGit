@@ -1,16 +1,35 @@
-from ArbDatabase import DataManager, DataModel, DataDict
+from ArbDatabase import DataManager, DataModel, DataObject, EID, DEFAULT_MANAGER
 
 
-class Review(DataModel):
+class Review(DataObject):
     def __init__(self, id:int, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
         self.review_id: int = id
-        DataModel.__init__(self, 'PLAYERS_REVIEWS', f'id = {id}')
-        self.player_id: int | None = self.get('player', None)
-        self.title: str = self.get('title', 'Неизвестный отзыв') if self.get('title') else 'Отзыв'
-        self.review_text: str = self.get('desc', '') if self.get('desc') else 'Пользователь не оставил пояснения к отзыву'
-        self.rating: float = self.get('rating', 0)
-        self.reviewer: int | None = self.get('reviewer', None)
+        DataObject.__init__(self, 'PLAYERS_REVIEWS', EID(id=id), kwargs.get('data_manager', DEFAULT_MANAGER))
+        self._player_id = self.field('player', None)
+        self._title = self.field('title', 'Неизвестный отзыв')
+        self._review_text = self.field('desc', 'Пользователь не оставил пояснений к отзыву')
+        self._rating = self.field('rating', 0)
+        self._reviewer = self.field('reviewer', None)
+
+    @property
+    def player_id(self):
+        return self._player_id.load(self.data_manager)
+
+    @property
+    def title(self):
+        return self._title.load(self.data_manager)
+
+    @property
+    def review_text(self):
+        return self._review_text.load(self.data_manager)
+
+    @property
+    def rating(self):
+        return self._rating.load(self.data_manager)
+
+    @property
+    def reviewer(self):
+        return self._reviewer.load(self.data_manager)
 
     def to_dict(self):
         return {
@@ -77,7 +96,7 @@ class Review(DataModel):
 class RPRequest(DataModel):
     def __init__(self, request_id:int, **kwargs):
         self.request_id = request_id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+        self.data_manager = kwargs.get('data_manager', DEFAULT_MANAGER)
         DataModel.__init__(self, 'SERVERS_REQUESTS', f'id = {self.request_id}', data_manager=self.data_manager)
         self.requester_id = self.get('requester', None)
         self.server_id = self.get('server', None)
@@ -155,19 +174,22 @@ class RPRequest(DataModel):
         return RPRequest(request_id, data_manager=db) if db.check('SERVERS_REQUESTS', f'id = {request_id}') else None
 
 
-class Player(DataModel):
+class Player(DataObject):
     def __init__(self, player_id:int, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
-        DataModel.__init__(self, 'PLAYERS', f'id = {player_id}')
+        DataObject.__init__(self, 'PLAYERS', EID(id = player_id), kwargs.get('data_manager', DEFAULT_MANAGER))
         self.player_id = player_id
-        self.current_character = self.get('character_id', None)
+        self._current_character = self.field('character_id', None)
+
+    @property
+    def current_character(self) -> int:
+        return self._current_character.load(self.data_manager)
 
     @staticmethod
     def register(player_id:int, current_character: int = None, data_manager: DataManager = None):
         if data_manager:
             db = data_manager
         else:
-            db = DataManager()
+            db = DEFAULT_MANAGER
 
         if db.check('PLAYERS', f'id = {player_id}'):
             return
@@ -249,20 +271,56 @@ class Player(DataModel):
             self.data_manager.update('PLAYERS', {'character_id': None}, f'id = {self.player_id}')
         self.data_manager.update('CHARS_INIT', {'owner': None}, f'id = {character_id}')
 
+    @classmethod
+    def get_owner_by_character_id(cls, character_id:int):
+        db = DEFAULT_MANAGER
+        character = db.select_dict('CHARS_INIT', filter=f'id = {character_id}')[0]
+        owner = character.get('owner', None)
+        return Player(owner, data_manager=db) if owner else None
+
+    @classmethod
+    def get_players_of_character(cls, character_id:int):
+        db = DEFAULT_MANAGER
+        players = db.select_dict('PLAYERS', filter=f'character_id = {character_id}')
+        players = [Player(player.get('id'), data_manager=db) for player in players]
+        return players
 
 
-
-class Server(DataModel):
+class Server(DataObject):
     def __init__(self, server_id:int, **kwargs):
-        self.data_manager = kwargs.get('data_manager', DataManager())
         self.id = server_id
-        DataModel.__init__(self, 'SERVER_SETTINGS', f'id = {server_id}')
-        self.responses_chat = self.get('responses_chat', None)
-        self.registration_chat = self.get('registration_chat', None)
-        self.features_chat = self.get('features_chat', None)
-        self.moderation_chat = self.get('moderation_chat', None)
-        self.basic_max_characters = self.get('basic_max_characters', 1)
-        self.currency = self.get('currency', 'USD') if self.get('currency') else 'USD'
+        DataObject.__init__(self, 'SERVER_SETTINGS', EID(id=server_id), kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._responses_chat_id = self.field('responses_chat', None)
+        self._registration_chat_id = self.field('registration_chat', None)
+        self._features_chat_id = self.field('features_chat', None)
+        self._moderation_chat_id = self.field('moderation_chat', None)
+        self._basic_max_characters = self.field('basic_max_characters', None)
+        self._currency = self.field('currency', 'USD')
+
+    @property
+    def responses_chat(self) -> int:
+        return self._responses_chat_id.load(self.data_manager)
+
+    @property
+    def registration_chat(self) -> int:
+        return self._registration_chat_id.load(self.data_manager)
+
+    @property
+    def features_chat(self) -> int:
+        return self._features_chat_id.load(self.data_manager)
+
+    @property
+    def moderation_chat(self) -> int:
+        return self._moderation_chat_id.load(self.data_manager)
+
+    @property
+    def basic_max_characters(self) -> int:
+        return self._basic_max_characters.load(self.data_manager)
+
+    @property
+    def currency(self) -> str:
+        return self._currency.load(self.data_manager)
 
     def get_max_characters(self, player_id:int) -> int:
         if self.data_manager.check('PLAYERS_SERVERS', f'id = {player_id} AND server_id = {self.id}'):
@@ -272,17 +330,17 @@ class Server(DataModel):
 
     @staticmethod
     def register_server(server_id:int, **kwargs):
-        db = kwargs.get('data_manager', DataManager())
+        db = kwargs.get('data_manager', DEFAULT_MANAGER)
         db.insert('SERVER_SETTINGS', {'id': server_id})
 
     @staticmethod
     def check_server_register(server_id:int, **kwargs) -> bool:
-        db = kwargs.get('data_manager', DataManager())
+        db = kwargs.get('data_manager', DEFAULT_MANAGER)
         return db.check('SERVER_SETTINGS', f'id = {server_id}')
 
     @staticmethod
     def register_server_if_not_exist(server_id:int, **kwargs):
-        db = kwargs.get('data_manager', DataManager())
+        db = kwargs.get('data_manager', DEFAULT_MANAGER)
         if not Server.check_server_register(server_id, data_manager=db):
             Server.register_server(server_id, data_manager=db)
 

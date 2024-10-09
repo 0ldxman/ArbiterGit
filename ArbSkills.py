@@ -135,9 +135,11 @@ class Skill(SkillInit, DataModel):
         return start_lvl + lvl_plus, total_cost
 
     def upgrade_skill(self, value:float, **kwargs):
-        c_talant = self.talant
 
-        total_exp = round(value) * c_talant * kwargs.get('crit_modifier', 1) + kwargs.get('extra', 0)
+        if self.lvl == self.mastery * 100:
+            return 0
+
+        total_exp = round(value) * kwargs.get('crit_modifier', 1) + kwargs.get('extra', 0)
         total_exp = total_exp * kwargs.get('extra_modifier', 1)
 
         new_lvl, exp_cost = self.skill_progress_cost(self.lvl, total_exp + self.exp)
@@ -150,6 +152,8 @@ class Skill(SkillInit, DataModel):
             self.add_exp(round(total_exp, 2))
             self.change_lvl(new_lvl - self.lvl)
 
+        return exp_cost
+
     def skill_check(self, difficulty: int = None):
         from ArbRoll import RollCheck
 
@@ -160,9 +164,9 @@ class Skill(SkillInit, DataModel):
 
         gained_exp = abs(roll.result - difficulty) * 10 if difficulty else 0.75 * roll.result
         crit_modifier = roll.crit_modifier
-        gained_exp *= crit_modifier
+        gained_exp = gained_exp * self.talant
 
-        self.upgrade_skill(gained_exp)
+        self.upgrade_skill(gained_exp, crit_modifier=crit_modifier)
 
         if difficulty is not None:
             return roll.result >= difficulty, roll

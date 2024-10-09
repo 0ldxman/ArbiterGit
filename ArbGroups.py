@@ -1,30 +1,48 @@
 # -*- coding: utf-8 -*-
-from ArbDatabase import DataManager, DataModel
+from ArbDatabase import DataManager, DataModel, DEFAULT_MANAGER, DataObject, EID
 
 
-class GroupRole(DataModel):
-    def __init__(self, id:str, **kwargs):
+class GroupRole(DataObject):
+    def __init__(self, id: str, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
+        DataObject.__init__(self, 'GROUP_ROLES', EID(id=id), kwargs.get('data_manager', DEFAULT_MANAGER))
 
-        DataModel.__init__(self, 'GROUP_ROLES', f'id = "{self.id}"')
+        self._label = self.field('label', 'Неизвестная роль')
+        self._is_leader = self.field('is_leader', 0)
+        self._can_invite = self.field('can_invite', 0)
 
-        self.label = self.get('label', 'Неизвестная роль')
-        self.is_leader = self.get('is_leader', 0) == 1
-        self.can_invite = self.get('can_invite', 0) == 1
+    @property
+    def label(self):
+        return self._label.load(self.data_manager)
+
+    @property
+    def is_leader(self):
+        return self._is_leader.load(self.data_manager) == 1
+
+    @property
+    def can_invite(self):
+        return self._can_invite.load(self.data_manager) == 1
 
     def __repr__(self):
         return f'GroupRole.{self.id}'
 
 
-class Group(DataModel):
+class Group(DataObject):
     def __init__(self, id:int, **kwargs):
         self.id = id
-        self.data_manager = kwargs.get('data_manager', DataManager())
 
-        DataModel.__init__(self, 'GROUP_INIT', f'id = {self.id}', data_manager=self.data_manager)
-        self.label = self.get('label', None)
-        self.owner_id = self.get('owner_id', None)
+        DataObject.__init__(self, 'GROUP_INIT', EID(id=self.id), kwargs.get('data_manager', DEFAULT_MANAGER))
+
+        self._label = self.field('label', None)
+        self._owner_id = self.field('owner_id', None)
+
+    @property
+    def label(self) -> str:
+        return self._label.load(self.data_manager)
+
+    @property
+    def owner_id(self) -> int:
+        return self._owner_id.load(self.data_manager)
 
     def add_member(self, character_id:int, role:str=None, custom_role_name:str=None):
         role = role if role else 'Participant'
@@ -73,7 +91,6 @@ class Group(DataModel):
             min_skill = min(min_skill, member_skill.lvl)
 
         return min_skill
-
 
     def group_roles_members(self):
         total_roles = {}
@@ -149,7 +166,7 @@ class Group(DataModel):
 
     @staticmethod
     def find_group_by_character_id(character_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         group_chars = db.select_dict('GROUP_CHARS', filter=f'id = {character_id}')
         if group_chars:
             return Group(group_chars[0].get('group_id'), data_manager=db)
@@ -174,7 +191,7 @@ class Group(DataModel):
 
     @staticmethod
     def create(label:str, owner_id:int):
-        db = DataManager()
+        db = DEFAULT_MANAGER
         max_id = db.maxValue('GROUP_INIT', 'id') + 1
         group_id = max_id if max_id else 1
 
@@ -219,7 +236,7 @@ class Group(DataModel):
         group = Group.find_group_by_character_id(character_id)
 
         members = [member for member in group_members]
-        current_location = CharacterLocation(group.owner_id if group else character_id)
+        current_location = CharacterLocation(group.owner_id if group else character_id, data_manager=DEFAULT_MANAGER)
 
         if current_location and current_location.entered_location:
             group_org = Organization(Group.get_group_org_by_character_id(character_id))
@@ -238,7 +255,7 @@ class Group(DataModel):
 
         min_cycles = float('inf')
         for member in members:
-            member_can_sleep = Inventory.get_inventory_by_character(member).find_component_in_items('SkipCycle')
+            member_can_sleep = Inventory.get_inventory_by_character(member, data_manager=DEFAULT_MANAGER).find_component_in_items('SkipCycle')
             if not member_can_sleep:
                 return 0
             member_cycles = Character(member).get_last_update_difference()

@@ -94,7 +94,7 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
         range = abs(range)
 
         range_factor = range * 0.29 # 0.45
-        cover_factor = cover * 0.25
+        cover_factor = cover * 0.8 # 0.25
         base_difficulty = 100 - self.accuracy * self.get_weapon_endurance()
 
         total_difficulty = base_difficulty + range_factor + cover_factor
@@ -166,16 +166,16 @@ class Weapon(Item, MeleeWeapon, RangeWeapon):
 
         return current_ammo.process_bullet()
 
-    def melee_attack(self):
+    def melee_attack(self, **kwargs):
         damage_info = self.get_melee_damage()
         damage_list = []
         for damage in damage_info:
             crit_mod = damage.get('critical_multiplier', 1) if random.randint(0, 100) >= 100 - damage.get('critical_chance', 1) else 1
 
-            damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod
+            damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod + kwargs.get('damage_bonus', 0)
             if self.material:
                 damage_value *= self.material.weapon_factor
-            total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration'), damage.get('blocked_type'), self.label, data_manager=self.data_manager)
+            total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration') * kwargs.get('penetration_bonus', 1), damage.get('blocked_type'), self.label, data_manager=self.data_manager)
 
             damage_list.append(total_damage)
         return damage_list
@@ -263,12 +263,19 @@ class RaceAttack(DataModel):
         self.attack_id = attack_id
         self.data_manager = kwargs.get('data_manager', DataManager())
         DataModel.__init__(self, 'RACES_MELEE', f'id = "{self.attack_id}"', data_manager=self.data_manager)
+        self.get_data_if_implant()
+
         self.label = self.get('name', 'Неизвестный удар') if self.get('name', None) is not None else 'Неизвестный удар'
         self.race = self.get('race', 'Неизвестная раса')
         self.part_id = self.get('part_id', None)
         self.range = self.get('range', 0) if self.get('range', None) is not None else 0
         self.attacks = self.get('attacks', 0)
         self.ap_cost = self.get('ap_cost', 0)
+
+    def get_data_if_implant(self):
+        if not self.data_manager.check('RACES_MELEE', f'id = "{self.attack_id}"'):
+            if self.data_manager.check('IMPLANTS_MELEE', f'id = "{self.attack_id}"'):
+                DataModel.__init__(self, 'IMPLANTS_MELEE', f'id = "{self.attack_id}"')
 
     def get_damage_info(self):
         if self.data_manager.check('RACES_DAMAGE', f'id = "{self.attack_id}"'):
@@ -294,11 +301,10 @@ class RaceAttack(DataModel):
         damage_info = self.get_damage_info()
         damage_list = []
         for damage in damage_info:
-            crit_mod = damage.get('critical_multiplier', 1) if random.randint(0, 100) >= 100 - damage.get(
-                'critical_chance', 1) else 1
+            crit_mod = damage.get('critical_multiplier', 1) if random.randint(0, 100) >= 100 - damage.get('critical_chance', 1) else 1
 
             damage_value = random.randint(damage.get('min_damage', 0), damage.get('max_damage', 0)) * crit_mod + kwargs.get('damage_bonus', 0)
-            total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration'),
+            total_damage = Damage(damage_value, damage.get('damage_type', 'Hit'), damage.get('penetration') * kwargs.get('penetration_bonus', 1) ,
                                   damage.get('blocked_type'), f'{Race(self.race, data_manager=self.data_manager).label.lower()} {self.label.lower()}', data_manager=self.data_manager)
 
             damage_list.append(total_damage)

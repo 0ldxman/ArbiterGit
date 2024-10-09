@@ -78,8 +78,17 @@ class MessageReader:
         self.descriptions: List[str] = []  # Используем строки для описаний
         self.non_rp: List[str] = []  # Не-РП сообщения
         self.phrases: List[Content] = []  # Фразы с типом
+        self.mentions: List[str] = []  # Упоминания
+
+        self.is_raw = False
 
         self.parse_message()
+        self.raw_message = message
+        self.mentions = [int(m) for m in self.mentions]
+
+    def get_mentions(self, line:str) -> List[str]:
+        """Извлекает упоминания из строки."""
+        return re.findall(r'<@(.*?)>', line)
 
     def get_descriptions(self, line: str) -> List[str]:
         """Извлекает описания из строки."""
@@ -145,18 +154,31 @@ class MessageReader:
     def parse_message(self):
         """Разбирает сообщение и извлекает действия, описания, фразы и не-РП сообщения."""
         lines = self.message.split('\n')
+        if lines[0].startswith('/'):
+            lines[0] = lines[0][1:]
+            self.is_raw = True
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
 
+            print(line[:1])
             if line.startswith('- ') or line.startswith('— '):
                 line = line[2:]
+            elif line.startswith('-') and line[:2] != '-#':
+                line = line[1:]
+            elif line.startswith('—'):
+                line = line[1:]
 
             non_rp = self.get_non_rp(line)
             if non_rp:
                 self.non_rp.append(non_rp)
                 continue
+
+            mentions = self.get_mentions(line)
+            if mentions:
+                self.mentions.extend(mentions)
 
             describes = self.get_descriptions(line)
             if describes:
@@ -170,7 +192,7 @@ class MessageReader:
 
             if line:
                 phrase_type = self.determine_phrase_type(line)
-                print(line, phrase_type)
+                print(line, phrase_type, mentions)
                 self.phrases.append(Content(content=line, type=phrase_type))
 
     def get_action_prefix(self, verb:str):
@@ -183,6 +205,9 @@ class MessageReader:
 
     def __str__(self) -> str:
         """Форматирует сообщение в требуемом формате."""
+        if self.is_raw:
+            return self.raw_message[1:]
+
         constructed_message = []
 
         for i in range(max(len(self.descriptions), len(self.phrases), len(self.actions))):
@@ -223,7 +248,6 @@ class MessageReader:
             Sound.create_sound(self.character_id, 'Action', random.randint(10, 110), action)
 
 
-
 class Dialogue(DataModel):
     def __init__(self, dialogue_id:int, **kwargs):
         self.dialogue_id = dialogue_id
@@ -257,7 +281,7 @@ class Dialogue(DataModel):
 
         content = "\n".join(total_messages)
         content = Dialogue.clean_text(content)
-        chunks = ListChunker(50, content.split("\n"))
+        chunks = ListChunker(25, content.split("\n"))
         sia = SentimentIntensityAnalyzer()
 
         sentiment_sum = 0
@@ -318,15 +342,21 @@ class Dialogue(DataModel):
         if not characters:
             return
 
-        if len(list(characters.keys())) == 1 and characters[0] == character_id:
+        if len(list(characters.keys())) == 1:
             return
 
         date = Character(character_id, data_manager=self.data_manager).update
         _ = characters.pop(character_id)
-        from ArbCharacterMemory import Relations, MemoryEvent
+        from ArbCharacterMemory import MemoryEvent, CharacterRelations
+        character_encounters = list(CharacterRelations(character_id, data_manager=self.data_manager).relations.keys())
+        print(character_encounters)
+
         for character in characters:
-            MemoryEvent.create_memory(character_id, familiarity_type, f'Знакомство после разговора {self.label}', character, date, False)
-            Relations.create_familiar(character_id, character, 'Familiar', None)
+            if character not in character_encounters:
+                print('тут', character, character_id)
+                CharacterRelations.create_familiar(character, character_id, 'Familiar', None)
+                CharacterRelations.create_relation_values(character_id, character)
+                MemoryEvent.create_memory(character_id, familiarity_type, f'Знакомство после разговора {self.label}', character, date, False)
 
     async def delete_dialogue(self):
         self.create_memories()

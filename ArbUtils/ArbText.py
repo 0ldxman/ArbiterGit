@@ -380,7 +380,7 @@ class TextAnalyzer:
         return entities
 
     def summarize_text(self, ratio:float=0.3):
-        summary = summarizer.summarize(self.text, ratio=ratio)
+        summary = summarizer.summarize(self.text, ratio=ratio, language='russian')
         return summary
 
     def train_semantic_model(self):
